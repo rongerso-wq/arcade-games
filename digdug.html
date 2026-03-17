@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <meta charset="UTF-8">
   <title>DIG DUG — Classic 1982</title>
   <link rel="stylesheet" href="cabinet.css">
@@ -930,5 +931,64 @@ function overlay(title, lines) {
 updateHUD();
 requestAnimationFrame(ts=>{lastTs=ts;requestAnimationFrame(loop);});
 </script>
+
+<!-- TOUCH CONTROLS -->
+<style>
+#touch-controls{position:fixed;bottom:0;left:0;right:0;height:170px;display:flex;
+  justify-content:space-between;align-items:flex-end;padding:12px 24px;
+  z-index:9999;pointer-events:none;user-select:none;-webkit-user-select:none;}
+.dpad{position:relative;width:132px;height:132px;pointer-events:none;}
+.dp{position:absolute;width:44px;height:44px;background:rgba(255,255,255,0.22);
+  border:2px solid rgba(255,255,255,0.55);border-radius:8px;display:flex;
+  align-items:center;justify-content:center;font-size:22px;color:#fff;
+  pointer-events:all;touch-action:none;cursor:pointer;-webkit-tap-highlight-color:transparent;}
+.dp:active{background:rgba(255,255,255,0.55);}
+#btn-up   {top:0;left:44px;}
+#btn-down {bottom:0;left:44px;}
+#btn-left {top:44px;left:0;}
+#btn-right{top:44px;right:0;}
+.act-wrap{display:flex;flex-direction:column;gap:10px;align-items:center;pointer-events:all;}
+.act{width:64px;height:64px;background:rgba(255,70,70,0.45);
+  border:2px solid rgba(255,110,110,0.8);border-radius:50%;display:flex;
+  align-items:center;justify-content:center;font-size:13px;font-weight:bold;
+  color:#fff;pointer-events:all;touch-action:none;cursor:pointer;
+  -webkit-tap-highlight-color:transparent;}
+.act:active{background:rgba(255,70,70,0.8);}
+</style>
+<div id="touch-controls">
+  <div class="dpad">
+    <div class="dp" id="btn-up">&#9650;</div>
+    <div class="dp" id="btn-left">&#9664;</div>
+    <div class="dp" id="btn-right">&#9654;</div>
+    <div class="dp" id="btn-down">&#9660;</div>
+  </div>
+  <div class="act-wrap">
+    <div class="act" id="btn-fire">FIRE</div>
+  </div>
+</div>
+<script>
+(function(){
+  function fire(code,type){
+    var ek={code:code,key:code==='Space'?' ':code.replace('Arrow',''),bubbles:true,cancelable:true};
+    document.dispatchEvent(new KeyboardEvent(type,ek));
+    window.dispatchEvent(new KeyboardEvent(type,ek));
+  }
+  function bind(id,code){
+    var el=document.getElementById(id);
+    if(!el)return;
+    el.addEventListener('touchstart',function(e){e.preventDefault();fire(code,'keydown');},{passive:false});
+    el.addEventListener('touchend',  function(e){e.preventDefault();fire(code,'keyup');  },{passive:false});
+    el.addEventListener('mousedown', function(){fire(code,'keydown');});
+    el.addEventListener('mouseup',   function(){fire(code,'keyup');  });
+  }
+  bind('btn-up',   'ArrowUp');
+  bind('btn-down', 'ArrowDown');
+  bind('btn-left', 'ArrowLeft');
+  bind('btn-right','ArrowRight');
+  bind('btn-fire', 'Space');
+})();
+</script>
+<!-- END TOUCH CONTROLS -->
+
 </body>
 </html>
