@@ -1,0 +1,299 @@
+/* ═══════════════════════════════════════════════════════════
+   ARCADE CABINET SKIN  —  shared by all games
+   ═══════════════════════════════════════════════════════════ */
+
+*, *::before, *::after { margin:0; padding:0; box-sizing:border-box; }
+
+body {
+  background: radial-gradient(ellipse at center, #1a0a2e 0%, #000 100%);
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: 'Courier New', monospace;
+  overflow: hidden;
+}
+
+/* ── Starfield ── */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background-image:
+    radial-gradient(1px 1px at 10% 20%, rgba(255,255,255,0.6) 0%, transparent 100%),
+    radial-gradient(1px 1px at 30% 60%, rgba(255,255,255,0.4) 0%, transparent 100%),
+    radial-gradient(1px 1px at 50% 10%, rgba(255,255,255,0.5) 0%, transparent 100%),
+    radial-gradient(1px 1px at 70% 80%, rgba(255,255,255,0.3) 0%, transparent 100%),
+    radial-gradient(1px 1px at 90% 40%, rgba(255,255,255,0.6) 0%, transparent 100%),
+    radial-gradient(1px 1px at 15% 75%, rgba(255,255,255,0.4) 0%, transparent 100%),
+    radial-gradient(1px 1px at 45% 50%, rgba(255,255,255,0.3) 0%, transparent 100%),
+    radial-gradient(1px 1px at 80% 25%, rgba(255,255,255,0.5) 0%, transparent 100%);
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* ── Scanlines overlay ── */
+body::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 3px,
+    rgba(0,0,0,0.08) 3px,
+    rgba(0,0,0,0.08) 4px
+  );
+  pointer-events: none;
+  z-index: 9999;
+}
+
+/* ═══════════════════════════════════════════
+   THE CABINET WRAPPER
+   ═══════════════════════════════════════════ */
+.cabinet-wrap {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  /* Cabinet body */
+  background: linear-gradient(160deg, #1c1c2e 0%, #0d0d1a 40%, #0a0a14 100%);
+  border: 3px solid #2a2a4a;
+  border-radius: 18px 18px 8px 8px;
+  box-shadow:
+    0 0 0 2px #0a0a1a,
+    0 0 40px rgba(0,100,255,0.15),
+    6px 6px 0 #050510,
+    -6px 6px 0 #050510,
+    inset 0 1px 0 rgba(255,255,255,0.05);
+  padding: 0 16px 16px;
+  max-height: 98vh;
+}
+
+/* ── Side art stripes ── */
+.cabinet-wrap::before,
+.cabinet-wrap::after {
+  content: '';
+  position: absolute;
+  top: 80px;
+  bottom: 40px;
+  width: 10px;
+  border-radius: 4px;
+}
+.cabinet-wrap::before {
+  left: 4px;
+  background: linear-gradient(180deg, var(--stripe1, #ff4400), var(--stripe2, #0044ff));
+  box-shadow: 0 0 8px var(--stripe1, #ff4400);
+}
+.cabinet-wrap::after {
+  right: 4px;
+  background: linear-gradient(180deg, var(--stripe1, #ff4400), var(--stripe2, #0044ff));
+  box-shadow: 0 0 8px var(--stripe1, #ff4400);
+}
+
+/* ── Marquee (top banner) ── */
+.cab-marquee {
+  width: calc(100% + 32px);
+  margin-left: -16px;
+  margin-right: -16px;
+  padding: 10px 24px 8px;
+  text-align: center;
+  background: var(--marquee-bg, linear-gradient(90deg, #000044, #000088, #000044));
+  border-bottom: 3px solid var(--marquee-border, #0044ff);
+  border-radius: 15px 15px 0 0;
+  box-shadow: 0 4px 20px var(--marquee-glow, rgba(0,68,255,0.5)), inset 0 1px 0 rgba(255,255,255,0.1);
+  position: relative;
+  overflow: hidden;
+}
+/* light bar animation inside marquee */
+.cab-marquee::after {
+  content: '';
+  position: absolute;
+  top: 0; left: -60%;
+  width: 40%; height: 100%;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.08), transparent);
+  animation: marqueeSheen 4s ease-in-out infinite;
+}
+@keyframes marqueeSheen {
+  0%   { left: -60%; }
+  100% { left: 120%; }
+}
+
+.cab-marquee-title {
+  font-size: clamp(13px, 2.5vw, 20px);
+  font-weight: bold;
+  letter-spacing: 6px;
+  color: var(--marquee-color, #4488ff);
+  text-shadow:
+    0 0 8px var(--marquee-color, #4488ff),
+    0 0 20px var(--marquee-color, #4488ff),
+    0 0 40px rgba(68,136,255,0.4);
+  animation: titlePulse 2s ease-in-out infinite;
+  text-transform: uppercase;
+}
+@keyframes titlePulse {
+  0%,100% { opacity: 1; }
+  50%      { opacity: 0.85; }
+}
+.cab-marquee-sub {
+  font-size: clamp(6px, 1vw, 8px);
+  letter-spacing: 4px;
+  color: rgba(255,255,255,0.4);
+  margin-top: 2px;
+}
+
+/* ── Score bar ── */
+.cab-scores {
+  width: 100%;
+  display: flex;
+  justify-content: center;
+  gap: 20px;
+  padding: 5px 8px 4px;
+  background: rgba(0,0,0,0.5);
+  border-bottom: 1px solid #111133;
+  flex-wrap: wrap;
+  font-size: clamp(8px, 1.5vw, 11px);
+  letter-spacing: 2px;
+}
+.cab-scores .s-label { color: #445; }
+.cab-scores .s-val   { color: var(--marquee-color, #4488ff); }
+.cab-scores .s-hi    { color: #ff4444; }
+
+/* ── Monitor bezel ── */
+.cab-monitor {
+  position: relative;
+  background: #050508;
+  border: 8px solid #111124;
+  border-radius: 10px;
+  box-shadow:
+    inset 0 0 30px rgba(0,0,0,0.9),
+    inset 0 0 6px rgba(0,30,80,0.4),
+    0 0 20px rgba(0,0,0,0.8);
+  margin: 6px 0;
+  overflow: hidden;
+}
+/* CRT screen curve highlight */
+.cab-monitor::before {
+  content: '';
+  position: absolute;
+  top: 4px; left: 4px; right: 4px; height: 30%;
+  background: linear-gradient(180deg, rgba(255,255,255,0.04) 0%, transparent 100%);
+  border-radius: 6px 6px 0 0;
+  pointer-events: none;
+  z-index: 10;
+}
+/* CRT scanline flicker */
+.cab-monitor::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    transparent 50%,
+    rgba(0,0,0,0.04) 50%
+  );
+  background-size: 100% 4px;
+  pointer-events: none;
+  z-index: 11;
+  animation: scanRoll 8s linear infinite;
+}
+@keyframes scanRoll {
+  from { background-position: 0 0; }
+  to   { background-position: 0 100%; }
+}
+
+.cab-monitor canvas {
+  display: block;
+  max-width: 100%;
+  max-height: calc(98vh - 220px);
+  width: auto;
+  height: auto;
+}
+
+/* ── Control panel ── */
+.cab-controls {
+  width: 100%;
+  background: linear-gradient(180deg, #0d0d1f 0%, #080810 100%);
+  border-top: 3px solid #1a1a33;
+  border-radius: 0 0 6px 6px;
+  padding: 8px 16px 6px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+/* coin slot */
+.cab-coin {
+  background: #0a0a18;
+  border: 2px solid #222244;
+  border-radius: 4px;
+  padding: 4px 10px;
+  font-size: clamp(6px, 1.2vw, 8px);
+  letter-spacing: 2px;
+  color: #ffcc00;
+  text-shadow: 0 0 6px #ffcc00;
+  animation: coinBlink 1.5s step-end infinite;
+}
+@keyframes coinBlink {
+  0%,49% { opacity:1; } 50%,100% { opacity:0.4; }
+}
+
+/* help text */
+.cab-help {
+  color: #334;
+  font-size: clamp(6px, 1vw, 8px);
+  letter-spacing: 2px;
+  text-align: center;
+  flex: 1;
+}
+
+/* joystick + buttons decoration */
+.cab-buttons {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.cab-btn {
+  width: 14px; height: 14px;
+  border-radius: 50%;
+  border: 2px solid rgba(0,0,0,0.4);
+  box-shadow: 0 2px 4px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.2);
+}
+.cab-btn.red    { background: radial-gradient(circle at 35% 35%, #ff8888, #cc0000); }
+.cab-btn.yellow { background: radial-gradient(circle at 35% 35%, #ffff88, #cccc00); }
+.cab-btn.blue   { background: radial-gradient(circle at 35% 35%, #8888ff, #0000cc); }
+
+.cab-stick {
+  width: 10px; height: 22px;
+  background: linear-gradient(180deg, #444, #222);
+  border-radius: 5px;
+  border: 1px solid #333;
+  position: relative;
+  margin-right: 4px;
+}
+.cab-stick::after {
+  content: '';
+  position: absolute;
+  top: -5px; left: 50%;
+  transform: translateX(-50%);
+  width: 14px; height: 14px;
+  background: radial-gradient(circle at 35% 35%, #666, #333);
+  border-radius: 50%;
+  border: 1px solid #222;
+}
+
+/* back link */
+.cab-back {
+  display: inline-block;
+  font-size: clamp(6px, 1vw, 8px);
+  letter-spacing: 2px;
+  color: #334;
+  text-decoration: none;
+  padding: 3px 8px;
+  border: 1px solid #1a1a33;
+  border-radius: 3px;
+  transition: color 0.2s, border-color 0.2s;
+}
+.cab-back:hover { color: #fff; border-color: #555; }

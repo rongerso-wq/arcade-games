@@ -1,0 +1,891 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>GALAGA — Classic 1981</title>
+  <link rel="stylesheet" href="cabinet.css">
+  <style>
+    :root {
+      --stripe1: #ff4488;
+      --stripe2: #440022;
+      --marquee-bg: linear-gradient(90deg, #1a0022, #330044, #1a0022);
+      --marquee-border: #ff4488;
+      --marquee-glow: rgba(255,68,136,0.5);
+      --marquee-color: #ff4488;
+    }
+    canvas { display:block; image-rendering:pixelated; }
+    #ui, #info { display:none; }
+  </style>
+</head>
+<body>
+<div id="ui"></div>
+<div class="cabinet-wrap">
+  <div class="cab-marquee">
+    <div class="cab-marquee-title">★ GALAGA ★</div>
+    <div class="cab-marquee-sub">NAMCO · 1981</div>
+  </div>
+  <div class="cab-scores">
+    <span class="s-label">1UP </span><span class="s-val" id="score">00000</span>
+    &nbsp;&nbsp;
+    <span class="s-label">HI </span><span class="s-hi" id="hiscore">00000</span>
+    &nbsp;&nbsp;
+    <span class="s-label">STAGE </span><span class="s-val" id="stage">01</span>
+    &nbsp;&nbsp;
+    <span class="s-label">LIVES </span><span class="s-val" id="lives">◀ ◀ ◀</span>
+  </div>
+  <div class="cab-monitor">
+    <canvas id="canvas"></canvas>
+  </div>
+  <div class="cab-controls">
+    <div class="cab-buttons">
+      <div class="cab-stick"></div>
+      <div class="cab-btn red"></div>
+    </div>
+    <div class="cab-help">← → MOVE · SPACE FIRE</div>
+    <div class="cab-coin">INSERT COIN</div>
+    <a class="cab-back" href="arcade.html">◀ ARCADE</a>
+  </div>
+</div>
+<div id="info"></div>
+
+<script>
+// ── Canvas ────────────────────────────────────────────────────────────────────
+const CW = 448, CH = 560;
+const canvas = document.getElementById('canvas');
+const ctx    = canvas.getContext('2d');
+canvas.width = CW; canvas.height = CH;
+
+// ── Enemy types ───────────────────────────────────────────────────────────────
+const TYPES = {
+  bee:       { col:'#ffcc00', wing:'#ff8800', pts:50,  dpx:100 },
+  butterfly: { col:'#44ccff', wing:'#0066ff', pts:80,  dpx:160 },
+  boss:      { col:'#ff4488', wing:'#cc0044', pts:150, dpx:400 },
+};
+
+// ── Audio ─────────────────────────────────────────────────────────────────────
+const AC = new (window.AudioContext || window.webkitAudioContext)();
+function tone(f, d, type='square', v=0.12) {
+  try {
+    const o = AC.createOscillator(), g = AC.createGain();
+    o.connect(g); g.connect(AC.destination);
+    o.type = type; o.frequency.value = f;
+    g.gain.setValueAtTime(v, AC.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.001, AC.currentTime + d);
+    o.start(); o.stop(AC.currentTime + d);
+  } catch(_) {}
+}
+const sndShoot   = () => tone(880, 0.07, 'square', 0.1);
+const sndHit     = () => { tone(200,0.1,'sawtooth',0.18); tone(140,0.15,'sawtooth',0.15); };
+const sndExplode = () => { tone(80,0.4,'sawtooth',0.22); tone(55,0.3,'sawtooth',0.18); };
+const sndDie     = () => { [300,220,160,100,60].forEach((f,i)=>setTimeout(()=>tone(f,0.1,'sawtooth',0.18),i*70)); };
+const sndBeam    = () => { for(let i=0;i<10;i++) setTimeout(()=>tone(280+i*15,0.06,'sine',0.1),i*35); };
+const sndCapture = () => { [440,330,220,165].forEach((f,i)=>setTimeout(()=>tone(f,0.14,'sine',0.15),i*90)); };
+const sndWave    = () => { [523,659,784,1047].forEach((f,i)=>setTimeout(()=>tone(f,0.12,'square',0.14),i*80)); };
+
+// ── Bezier ────────────────────────────────────────────────────────────────────
+function b4(t, p0, p1, p2, p3) {
+  const u = 1-t;
+  return {
+    x: u*u*u*p0.x + 3*u*u*t*p1.x + 3*u*t*t*p2.x + t*t*t*p3.x,
+    y: u*u*u*p0.y + 3*u*u*t*p1.y + 3*u*t*t*p2.y + t*t*t*p3.y,
+  };
+}
+
+// Chain two bezier4 curves: t∈[0,0.5) → first, t∈[0.5,1] → second
+function b4x2(t, p0,p1,p2,p3, q0,q1,q2,q3) {
+  return t < 0.5 ? b4(t*2, p0,p1,p2,p3) : b4((t-0.5)*2, q0,q1,q2,q3);
+}
+
+// ── Formation positions ───────────────────────────────────────────────────────
+// Rows 0-1: 4 bosses (centered), rows 2-5: 8 enemies each
+function fpos(row, col) {
+  if (row < 2) return { x: 146 + col*52, y: 68 + row*44 };
+  return { x: 42 + col*52, y: 68 + row*44 };
+}
+
+// ── Enemy factory ─────────────────────────────────────────────────────────────
+function makeEnemies() {
+  const list = [];
+  let spawnAt = 0;
+
+  function addRow(type, row, cols, fromRight) {
+    const order = fromRight
+      ? Array.from({length:cols},(_,i)=>cols-1-i)
+      : Array.from({length:cols},(_,i)=>i);
+    order.forEach((col, i) => {
+      const fp = fpos(row, col);
+      list.push({
+        id: list.length, type, row, col,
+        fx: fp.x, fy: fp.y, x: fp.x, y: fp.y,
+        state: 'pending',
+        hp: type==='boss' ? 2 : 1,
+        frame: 0, frameTimer: 0,
+        spawnAt: spawnAt + i*5,
+        pathT: 0,
+        entryFn: null, diveFn: null, returnFn: null,
+        // capture beam tracking
+        beamT0: 0, beamT1: 0,
+        captured: false,
+        exploding: false, explodeT: 0,
+        // per-dive random offset (so path is fixed once dive starts)
+        dxOff: 0,
+      });
+    });
+    spawnAt += cols*5 + 18;
+  }
+
+  addRow('bee',       5, 8, true);
+  addRow('bee',       4, 8, false);
+  addRow('butterfly', 3, 8, true);
+  addRow('butterfly', 2, 8, false);
+  addRow('boss',      1, 4, true);
+  addRow('boss',      0, 4, false);
+
+  return list;
+}
+
+// ── Entry paths (bezier from offscreen to formation slot) ─────────────────────
+function buildEntryPath(e) {
+  const r = e.fx > CW/2;
+  const sx = r ? CW+30 : -30, sy = -40;
+
+  if (e.type === 'bee') {
+    e.entryFn = t => b4(t,
+      {x:sx, y:sy},
+      {x: r ? CW+20 : -20, y: CH*0.3},
+      {x: e.fx+(r?70:-70), y: e.fy+50},
+      {x: e.fx, y: e.fy}
+    );
+  } else if (e.type === 'butterfly') {
+    e.entryFn = t => b4(t,
+      {x:sx, y:sy},
+      {x: r ? CW*0.82 : CW*0.18, y: CH*0.22},
+      {x: e.fx+(r?55:-55), y: e.fy-50},
+      {x: e.fx, y: e.fy}
+    );
+  } else { // boss — dramatic wide arc
+    e.entryFn = t => b4(t,
+      {x:sx, y:sy},
+      {x: r ? CW+70 : -70, y: CH*0.42},
+      {x: r ? CW*0.62 : CW*0.38, y: CH*0.14},
+      {x: e.fx, y: e.fy}
+    );
+  }
+}
+
+// ── Dive paths ────────────────────────────────────────────────────────────────
+// Called when the enemy starts diving; playerX is snapshotted
+function buildDivePath(e, playerX) {
+  const dir  = e.fx > CW/2 ? 1 : -1;
+  const px   = playerX + e.dxOff;     // fixed target with random jitter
+  const py   = CH - 50;
+
+  if (e.type === 'bee') {
+    // Small loop sideways, then straight dive
+    e.diveFn = t => b4x2(t,
+      {x:e.fx, y:e.fy},
+      {x:e.fx+dir*55, y:e.fy-55},
+      {x:e.fx+dir*40, y:e.fy+40},
+      {x:e.fx, y:e.fy+80},
+      // ──────────────────────────────
+      {x:e.fx, y:e.fy+80},
+      {x:(e.fx+px)*0.5, y:CH*0.52},
+      {x:px+dir*15, y:CH*0.78},
+      {x:px, y:CH+50}
+    );
+  } else if (e.type === 'butterfly') {
+    // Wide outer loop then steep dive
+    e.diveFn = t => b4x2(t,
+      {x:e.fx, y:e.fy},
+      {x:e.fx+dir*130, y:e.fy-10},
+      {x:e.fx+dir*150, y:CH*0.48},
+      {x:e.fx+dir*50,  y:CH*0.58},
+      // ──────────────────────────────
+      {x:e.fx+dir*50, y:CH*0.58},
+      {x:px+dir*20, y:CH*0.68},
+      {x:px-dir*10, y:CH*0.84},
+      {x:px, y:CH+50}
+    );
+  } else { // boss — spiral sweep + capture approach
+    e.beamT0 = 0.46; e.beamT1 = 0.64;
+    e.diveFn = t => {
+      if (t < 0.38) {
+        // Phase 1: spiral outward
+        return b4(t/0.38,
+          {x:e.fx, y:e.fy},
+          {x:e.fx+dir*150, y:e.fy-20},
+          {x:e.fx+dir*170, y:CH*0.32},
+          {x:CW/2+dir*10, y:CH*0.40}
+        );
+      } else if (t < 0.68) {
+        // Phase 2: slow hover — capture beam fires here
+        return b4((t-0.38)/0.30,
+          {x:CW/2+dir*10, y:CH*0.40},
+          {x:CW/2+(px-CW/2)*0.35, y:CH*0.53},
+          {x:px+8, y:CH*0.64},
+          {x:px, y:CH*0.74}
+        );
+      } else {
+        // Phase 3: exit bottom
+        return b4((t-0.68)/0.32,
+          {x:px, y:CH*0.74},
+          {x:px+dir*55, y:CH*0.84},
+          {x:e.fx+dir*30, y:CH+20},
+          {x:e.fx, y:CH+60}
+        );
+      }
+    };
+  }
+
+  // Return path — called with (rx,ry) where enemy exited the bottom
+  e.returnFn = (rx, ry) => t => b4(t,
+    {x:rx, y:ry},
+    {x:rx, y:ry-110},
+    {x:e.fx+(rx>e.fx?60:-60), y:e.fy-65},
+    {x:e.fx, y:e.fy}
+  );
+}
+
+// ── Game State ────────────────────────────────────────────────────────────────
+let score = 0, hiScore = 0, stageNum = 1, lives = 3;
+let gameState = 'IDLE'; // IDLE | ENTERING | PLAYING | GAMEOVER | STAGECLEAR
+let enemies = [], bullets = [], eBullets = [], explosions = [];
+let player = {}, stars = [];
+let fc = 0; // frame counter
+let allEntered = false;
+let diveTimer = 0, diveInterval = 140;
+let shootTimer = 0, shootInterval = 90;
+// Capture beam
+let beam = { active:false, x:0, y:0, h:0, bossId:-1, alpha:0 };
+
+// ── Stars ─────────────────────────────────────────────────────────────────────
+function makeStars() {
+  stars = Array.from({length:90}, () => ({
+    x: Math.random()*CW, y: Math.random()*CH,
+    spd: 0.15 + Math.random()*0.7,
+    br: 0.3 + Math.random()*0.7,
+    sz: Math.random()>0.8 ? 1.5 : 1,
+  }));
+}
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+function initGame() {
+  score = 0; stageNum = 1; lives = 3;
+  makeStars();
+  startStage();
+}
+
+function startStage() {
+  enemies = makeEnemies();
+  enemies.forEach(buildEntryPath);
+  bullets = []; eBullets = []; explosions = [];
+  allEntered = false;
+  diveTimer = 0;
+  diveInterval = Math.max(55, 140 - stageNum*8);
+  shootInterval = Math.max(35, 90 - stageNum*5);
+  shootTimer = 0;
+  beam = { active:false, x:0, y:0, h:0, bossId:-1, alpha:0 };
+  fc = 0;
+  player = {
+    x: CW/2, y: CH-52,
+    state: 'alive', // alive|dying|dead
+    dieT: 0,
+    dual: false,
+    lastShot: 0,
+  };
+  updateHUD();
+  gameState = 'ENTERING';
+}
+
+function updateHUD() {
+  document.getElementById('score').textContent   = String(score).padStart(5,'0');
+  document.getElementById('hiscore').textContent = String(hiScore).padStart(5,'0');
+  document.getElementById('stage').textContent   = String(stageNum).padStart(2,'0');
+  document.getElementById('lives').textContent   = '◀ '.repeat(Math.max(0,lives)).trim() || '---';
+}
+
+// ── Input ─────────────────────────────────────────────────────────────────────
+const keys = {};
+window.addEventListener('keydown', e => {
+  if (AC.state === 'suspended') AC.resume();
+  keys[e.code] = true;
+  if (e.code === 'Space') e.preventDefault();
+  if ((gameState==='IDLE'||gameState==='GAMEOVER') && (e.code==='Space'||e.key==='Enter')) {
+    lives = 3; initGame();
+  }
+});
+window.addEventListener('keyup', e => { delete keys[e.code]; });
+
+// ── Main loop ─────────────────────────────────────────────────────────────────
+let lastTs = 0;
+function loop(ts) {
+  requestAnimationFrame(loop);
+  lastTs = ts; fc++;
+
+  // Always scroll stars
+  stars.forEach(s => { s.y += s.spd; if (s.y > CH) { s.y = 0; s.x = Math.random()*CW; } });
+
+  if (gameState === 'IDLE' || gameState === 'GAMEOVER' || gameState === 'STAGECLEAR') {
+    draw(); return;
+  }
+
+  updateEnemies();
+  updatePlayer();
+  updateBullets();
+  updateExplosions();
+  checkWin();
+  draw();
+}
+
+// ── Update enemies ────────────────────────────────────────────────────────────
+function updateEnemies() {
+  const swayX = Math.sin(fc * 0.012) * 20;
+  let pendingOrEntering = false;
+
+  enemies.forEach(e => {
+    if (e.state === 'dead') return;
+
+    // Sprite animation
+    e.frameTimer++;
+    if (e.frameTimer >= 18) { e.frameTimer = 0; e.frame ^= 1; }
+
+    // Explosion countdown
+    if (e.exploding) {
+      e.explodeT++;
+      if (e.explodeT > 32) e.state = 'dead';
+      return;
+    }
+
+    if (e.state === 'pending') {
+      pendingOrEntering = true;
+      if (fc >= e.spawnAt) { e.state = 'entering'; e.pathT = 0; }
+      return;
+    }
+
+    if (e.state === 'entering') {
+      pendingOrEntering = true;
+      e.pathT += 0.013;
+      if (e.pathT >= 1) {
+        e.pathT = 1; e.state = 'formation';
+        e.x = e.fx; e.y = e.fy;
+      } else {
+        const p = e.entryFn(e.pathT);
+        e.x = p.x; e.y = p.y;
+      }
+      return;
+    }
+
+    if (e.state === 'formation') {
+      e.x = e.fx + swayX; e.y = e.fy;
+      return;
+    }
+
+    if (e.state === 'diving') {
+      // pathT can start negative (escort delay)
+      e.pathT += 0.011 + stageNum * 0.001;
+      const clampedT = Math.max(0, Math.min(1, e.pathT));
+      const p = e.diveFn(clampedT);
+      e.x = p.x; e.y = p.y;
+
+      // Capture beam for boss
+      if (e.type === 'boss') {
+        const inBeamWindow = e.pathT >= e.beamT0 && e.pathT <= e.beamT1;
+        if (inBeamWindow && !beam.active) {
+          beam.active  = true;
+          beam.bossId  = e.id;
+          beam.alpha   = 0;
+          sndBeam();
+        }
+        if (beam.active && beam.bossId === e.id) {
+          beam.x = e.x;
+          beam.y = e.y + 14;
+          beam.h = CH - 55 - beam.y;
+          beam.alpha = Math.min(1, beam.alpha + 0.08);
+
+          // Check player capture
+          if (player.state === 'alive' && inBeamWindow &&
+              Math.abs(player.x - beam.x) < 18) {
+            triggerCapture(e);
+          }
+        }
+        if (!inBeamWindow && beam.bossId === e.id) {
+          beam.active = false; beam.alpha = 0;
+        }
+      }
+
+      // Exit bottom → return to formation
+      if (e.pathT >= 1) {
+        if (beam.bossId === e.id) { beam.active = false; beam.alpha = 0; }
+        e.state   = 'returning';
+        e.pathT   = 0;
+        e.retFn   = e.returnFn(e.x, -30);
+      }
+      return;
+    }
+
+    if (e.state === 'returning') {
+      e.pathT += 0.014;
+      if (e.pathT >= 1) {
+        e.state = 'formation'; e.x = e.fx; e.y = e.fy;
+      } else {
+        const p = e.retFn(e.pathT);
+        e.x = p.x; e.y = p.y;
+      }
+      return;
+    }
+  });
+
+  // Transition to PLAYING once all enemies have landed
+  if (!allEntered && !pendingOrEntering &&
+      enemies.every(e => e.state !== 'pending' && e.state !== 'entering')) {
+    allEntered = true;
+    if (gameState === 'ENTERING') { gameState = 'PLAYING'; sndWave(); }
+  }
+
+  if (gameState !== 'PLAYING') return;
+
+  // Dive trigger
+  diveTimer++;
+  if (diveTimer >= diveInterval) { diveTimer = 0; triggerDive(); }
+
+  // Enemy shooting
+  shootTimer++;
+  if (shootTimer >= shootInterval) { shootTimer = 0; enemyShoot(); }
+}
+
+function triggerDive() {
+  const pool = enemies.filter(e => e.state === 'formation');
+  if (!pool.length) return;
+
+  const bosses = pool.filter(e => e.type === 'boss');
+  const butts  = pool.filter(e => e.type === 'butterfly');
+  const bees   = pool.filter(e => e.type === 'bee');
+
+  const r = Math.random();
+  let lead;
+  if      (r < 0.25 && bosses.length) lead = bosses[0|Math.random()*bosses.length];
+  else if (r < 0.55 && butts.length)  lead = butts[0|Math.random()*butts.length];
+  else if (bees.length)                lead = bees[0|Math.random()*bees.length];
+  else                                 lead = pool[0|Math.random()*pool.length];
+
+  lead.dxOff = (Math.random()-0.5)*50;
+  buildDivePath(lead, player.x);
+  lead.state = 'diving'; lead.pathT = 0;
+
+  // Escort bees join boss/butterfly dives
+  if (lead.type !== 'bee' && bees.length >= 2 && Math.random() < 0.55) {
+    bees.slice(0, 2).forEach((bee, i) => {
+      bee.dxOff = (Math.random()-0.5)*40;
+      buildDivePath(bee, player.x + (i===0?-28:28));
+      bee.state  = 'diving';
+      bee.pathT  = -(0.10 + i*0.08); // staggered delay
+    });
+  }
+}
+
+function enemyShoot() {
+  const shooters = enemies.filter(e =>
+    (e.state==='formation'||e.state==='diving') && !e.exploding);
+  if (!shooters.length || eBullets.length >= 5) return;
+  const s = shooters[0|Math.random()*shooters.length];
+  eBullets.push({ x:s.x, y:s.y+10 });
+}
+
+function triggerCapture(boss) {
+  if (player.state !== 'alive') return;
+  player.state = 'captured';
+  boss.captured = true;
+  sndCapture();
+  explosions.push({ x:player.x, y:player.y, t:0, color:'#44ccff', big:true });
+  lives--;
+  updateHUD();
+  if (lives <= 0) {
+    setTimeout(() => {
+      if (score > hiScore) hiScore = score;
+      updateHUD();
+      gameState = 'GAMEOVER';
+    }, 2000);
+  } else {
+    setTimeout(() => {
+      player.state = 'alive';
+      player.x = CW/2;
+      player.dual = false;
+    }, 1800);
+  }
+}
+
+// ── Update player ─────────────────────────────────────────────────────────────
+function updatePlayer() {
+  if (player.state === 'dying') {
+    player.dieT--;
+    if (player.dieT <= 0) player.state = 'dead';
+    return;
+  }
+  if (player.state !== 'alive') return;
+
+  if (keys['ArrowLeft']  || keys['KeyA']) player.x = Math.max(14, player.x - 3);
+  if (keys['ArrowRight'] || keys['KeyD']) player.x = Math.min(CW-14, player.x + 3);
+
+  if (keys['Space'] || keys['KeyZ']) {
+    const now = performance.now();
+    if (!player.lastShot || now - player.lastShot > 210) {
+      player.lastShot = now;
+      bullets.push({ x:player.x, y:player.y-10 });
+      if (player.dual) bullets.push({ x:player.x+28, y:player.y-10 });
+      sndShoot();
+    }
+  }
+}
+
+// ── Update bullets ────────────────────────────────────────────────────────────
+function updateBullets() {
+  bullets = bullets.filter(b => {
+    b.y -= 9;
+    if (b.y < -10) return false;
+    for (const e of enemies) {
+      if (e.state==='dead' || e.exploding) continue;
+      if (Math.abs(b.x-e.x)<13 && Math.abs(b.y-e.y)<11) {
+        hitEnemy(e); return false;
+      }
+    }
+    return true;
+  });
+
+  eBullets = eBullets.filter(b => {
+    b.y += 4 + stageNum*0.25;
+    if (b.y > CH+10) return false;
+    if (player.state==='alive' &&
+        Math.abs(b.x-player.x)<12 && Math.abs(b.y-player.y)<11) {
+      killPlayer(); return false;
+    }
+    return true;
+  });
+}
+
+function hitEnemy(e) {
+  e.hp--;
+  sndHit();
+  if (e.hp <= 0) {
+    const pts = e.state==='diving' ? TYPES[e.type].dpx : TYPES[e.type].pts;
+    score += pts;
+    if (score > hiScore) { hiScore = score; }
+    updateHUD();
+    e.exploding = true; e.explodeT = 0;
+    explosions.push({ x:e.x, y:e.y, t:0, color:TYPES[e.type].col });
+    sndExplode();
+    if (e.type==='boss' && e.captured) releaseCapturedShip();
+    if (beam.bossId === e.id) { beam.active = false; beam.alpha = 0; }
+  }
+}
+
+function releaseCapturedShip() {
+  if (player.state === 'alive') {
+    player.dual = true;
+    score += 1000; updateHUD();
+  }
+}
+
+function killPlayer() {
+  if (player.state !== 'alive') return;
+  player.state = 'dying'; player.dieT = 70;
+  sndDie();
+  explosions.push({ x:player.x, y:player.y, t:0, color:'#44ccff', big:true });
+  lives--;
+  updateHUD();
+  if (lives <= 0) {
+    setTimeout(() => {
+      if (score > hiScore) hiScore = score;
+      updateHUD();
+      gameState = 'GAMEOVER';
+    }, 2000);
+  } else {
+    setTimeout(() => {
+      if (gameState === 'PLAYING' || gameState === 'ENTERING') {
+        player.state = 'alive'; player.dual = false; player.x = CW/2;
+      }
+    }, 1800);
+  }
+}
+
+function updateExplosions() {
+  explosions = explosions.filter(ex => { ex.t++; return ex.t < (ex.big?50:34); });
+}
+
+function checkWin() {
+  if (enemies.length && enemies.every(e => e.state === 'dead')) {
+    gameState = 'STAGECLEAR';
+    sndWave();
+    stageNum++;
+    updateHUD();
+    setTimeout(() => startStage(), 2600);
+  }
+}
+
+// ── Draw ──────────────────────────────────────────────────────────────────────
+function draw() {
+  ctx.fillStyle = '#000'; ctx.fillRect(0,0,CW,CH);
+  drawStars();
+  drawBeam();
+  enemies.forEach(drawEnemy);
+  drawExplosions();
+  drawBullets();
+  drawPlayer();
+  drawHUDLine();
+
+  if (gameState==='IDLE')
+    overlay('GALAGA',['PRESS SPACE TO START','','← → MOVE  ·  SPACE FIRE',
+      'BOSS SHIPS FIRE CAPTURE BEAMS','DESTROY ALL 40 ENEMIES!']);
+  if (gameState==='GAMEOVER')
+    overlay('GAME OVER',[
+      `SCORE  ${String(score).padStart(5,'0')}`,
+      `HI     ${String(hiScore).padStart(5,'0')}`,'','PRESS SPACE TO RETRY']);
+  if (gameState==='STAGECLEAR')
+    overlay(`STAGE ${stageNum-1} CLEAR`,[`SCORE  ${String(score).padStart(5,'0')}`,'','NEXT STAGE...']);
+}
+
+function drawStars() {
+  stars.forEach(s => {
+    ctx.globalAlpha = s.br * (0.7 + 0.3*Math.sin(fc*0.05+s.x));
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(s.x, s.y, s.sz, s.sz);
+  });
+  ctx.globalAlpha = 1;
+}
+
+function drawBeam() {
+  if (!beam.active || beam.h <= 0) return;
+  const a = beam.alpha * (0.35 + 0.15*Math.sin(fc*0.4));
+  const grad = ctx.createLinearGradient(beam.x, beam.y, beam.x, beam.y+beam.h);
+  grad.addColorStop(0,   `rgba(120,120,255,${a})`);
+  grad.addColorStop(0.5, `rgba(180,180,255,${a*0.7})`);
+  grad.addColorStop(1,   `rgba(220,220,255,0.02)`);
+  ctx.fillStyle = grad;
+  ctx.beginPath();
+  ctx.moveTo(beam.x, beam.y);
+  ctx.lineTo(beam.x - beam.h*0.25, beam.y + beam.h);
+  ctx.lineTo(beam.x + beam.h*0.25, beam.y + beam.h);
+  ctx.closePath();
+  ctx.fill();
+  ctx.strokeStyle = `rgba(160,160,255,${a*0.8})`;
+  ctx.lineWidth = 1; ctx.stroke();
+}
+
+function drawEnemy(e) {
+  if (e.state === 'dead' || e.state === 'pending') return;
+  ctx.save();
+  ctx.translate(e.x, e.y);
+
+  if (e.exploding) {
+    const t = e.explodeT / 32;
+    ctx.globalAlpha = 1-t;
+    const r = t * 18;
+    ctx.strokeStyle = TYPES[e.type].col;
+    ctx.lineWidth = 2;
+    for (let i = 0; i < 6; i++) {
+      const a = (i/6)*Math.PI*2;
+      ctx.beginPath();
+      ctx.moveTo(Math.cos(a)*r*0.25, Math.sin(a)*r*0.25);
+      ctx.lineTo(Math.cos(a)*r,      Math.sin(a)*r);
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 1; ctx.restore(); return;
+  }
+
+  const f = e.frame;
+  if      (e.type==='bee')       drawBee(f);
+  else if (e.type==='butterfly') drawButterfly(f);
+  else                           drawBoss(f, e.hp, e.captured);
+
+  ctx.restore();
+}
+
+function drawBee(f) {
+  // Wings
+  ctx.fillStyle = f ? '#ff880099' : '#ffcc0099';
+  ctx.beginPath(); ctx.ellipse(-10,-1,7,4,-0.35,0,Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.ellipse( 10,-1,7,4, 0.35,0,Math.PI*2); ctx.fill();
+  // Body
+  ctx.fillStyle = '#ffcc00';
+  ctx.beginPath(); ctx.ellipse(0, 1, 6, 9, 0, 0, Math.PI*2); ctx.fill();
+  // Stripes
+  ctx.fillStyle = '#aa6600';
+  ctx.fillRect(-5,-3,10,2); ctx.fillRect(-5,1,10,2);
+  // Eyes
+  ctx.fillStyle = '#000';
+  ctx.beginPath(); ctx.arc(-2,-5,1.5,0,Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc( 2,-5,1.5,0,Math.PI*2); ctx.fill();
+}
+
+function drawButterfly(f) {
+  const ws = f ? 1.08 : 0.92;
+  // Upper wings
+  ctx.fillStyle = '#0044cc88';
+  ctx.beginPath(); ctx.ellipse(-13*ws,-3,10*ws,7,-0.3,0,Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.ellipse( 13*ws,-3,10*ws,7, 0.3,0,Math.PI*2); ctx.fill();
+  // Lower wings
+  ctx.fillStyle = '#0066ff55';
+  ctx.beginPath(); ctx.ellipse(-10*ws,6,7*ws,5,-0.2,0,Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.ellipse( 10*ws,6,7*ws,5, 0.2,0,Math.PI*2); ctx.fill();
+  // Wing highlights
+  ctx.fillStyle = '#88eeffaa';
+  ctx.beginPath(); ctx.ellipse(-11*ws,-4,5*ws,3,-0.3,0,Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.ellipse( 11*ws,-4,5*ws,3, 0.3,0,Math.PI*2); ctx.fill();
+  // Body
+  ctx.fillStyle = '#44ccff';
+  ctx.beginPath(); ctx.ellipse(0, 1, 4, 9, 0, 0, Math.PI*2); ctx.fill();
+  // Eyes
+  ctx.fillStyle = '#fff';
+  ctx.beginPath(); ctx.arc(-2,-6,2,0,Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc( 2,-6,2,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle = '#00f';
+  ctx.beginPath(); ctx.arc(-2,-6,1,0,Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc( 2,-6,1,0,Math.PI*2); ctx.fill();
+}
+
+function drawBoss(f, hp, captured) {
+  const ws = f ? 1.05 : 0.95;
+  // Outer wings
+  ctx.fillStyle = hp===2 ? '#cc004477' : '#ff441166';
+  ctx.beginPath(); ctx.ellipse(-17*ws,1,13*ws,8,-0.15,0,Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.ellipse( 17*ws,1,13*ws,8, 0.15,0,Math.PI*2); ctx.fill();
+  // Inner wings
+  ctx.fillStyle = hp===2 ? '#ff448866' : '#ff884455';
+  ctx.beginPath(); ctx.ellipse(-11*ws,7,8*ws,6,0.2,0,Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.ellipse( 11*ws,7,8*ws,6,-0.2,0,Math.PI*2); ctx.fill();
+  // Body
+  ctx.fillStyle = hp===2 ? '#ff4488' : '#ff8844';
+  ctx.beginPath(); ctx.ellipse(0, 2, 8, 11, 0, 0, Math.PI*2); ctx.fill();
+  // Head
+  ctx.fillStyle = '#ff99cc';
+  ctx.beginPath(); ctx.ellipse(0,-6, 6, 6, 0, 0, Math.PI*2); ctx.fill();
+  // Eyes
+  ctx.fillStyle = '#fff';
+  ctx.beginPath(); ctx.arc(-3,-8,2.5,0,Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc( 3,-8,2.5,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle = '#0000dd';
+  ctx.beginPath(); ctx.arc(-3,-8,1.2,0,Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc( 3,-8,1.2,0,Math.PI*2); ctx.fill();
+  // HP glow ring
+  if (hp===2) {
+    ctx.strokeStyle = '#ff4488';
+    ctx.lineWidth = 1.5;
+    ctx.globalAlpha = 0.35 + 0.25*Math.sin(fc*0.14);
+    ctx.beginPath(); ctx.arc(0,0,17,0,Math.PI*2); ctx.stroke();
+    ctx.globalAlpha = 1;
+  }
+  // Captured ship mini sprite
+  if (captured) {
+    ctx.fillStyle = '#44ccff';
+    ctx.beginPath();
+    ctx.moveTo(0,-20); ctx.lineTo(-5,-13); ctx.lineTo(-2,-15);
+    ctx.lineTo(0,-14); ctx.lineTo(2,-15); ctx.lineTo(5,-13);
+    ctx.closePath(); ctx.fill();
+  }
+}
+
+function drawPlayer() {
+  if (player.state==='dead' || player.state==='captured') return;
+  ctx.save();
+  if (player.state==='dying') {
+    const t = 1 - player.dieT/70;
+    ctx.globalAlpha = Math.max(0, player.dieT/70);
+    ctx.translate(player.x, player.y);
+    ctx.rotate(t * Math.PI * 2.5);
+    ctx.scale(1-t*0.5, 1-t*0.5);
+    ctx.translate(-player.x, -player.y);
+  }
+  drawShip(player.x, player.y);
+  if (player.dual) drawShip(player.x+28, player.y);
+  ctx.restore();
+}
+
+function drawShip(x, y) {
+  // Main body
+  ctx.fillStyle = '#44ccff';
+  ctx.beginPath();
+  ctx.moveTo(x, y-13);
+  ctx.lineTo(x-8,  y+7);
+  ctx.lineTo(x-4,  y+3);
+  ctx.lineTo(x,    y+5);
+  ctx.lineTo(x+4,  y+3);
+  ctx.lineTo(x+8,  y+7);
+  ctx.closePath(); ctx.fill();
+  // Cockpit
+  ctx.fillStyle = '#aaeeff';
+  ctx.beginPath(); ctx.ellipse(x, y-3, 3, 5, 0, 0, Math.PI*2); ctx.fill();
+  // Engine glow
+  ctx.fillStyle = `hsl(30,100%,${50+20*Math.sin(fc*0.3)}%)`;
+  ctx.beginPath(); ctx.ellipse(x, y+8, 3, 2+Math.random(), 0, 0, Math.PI*2); ctx.fill();
+}
+
+function drawBullets() {
+  ctx.shadowBlur = 5;
+  bullets.forEach(b => {
+    ctx.shadowColor = '#ffff44';
+    ctx.fillStyle   = '#ffff88';
+    ctx.fillRect(b.x-1, b.y, 2, 9);
+  });
+  eBullets.forEach(b => {
+    ctx.shadowColor = '#ff4444';
+    ctx.fillStyle   = '#ff8888';
+    ctx.fillRect(b.x-1, b.y, 2, 8);
+  });
+  ctx.shadowBlur = 0;
+}
+
+function drawExplosions() {
+  explosions.forEach(ex => {
+    const max = ex.big ? 50 : 34;
+    const t   = ex.t / max;
+    const r   = (ex.big ? 28 : 15) * t;
+    ctx.globalAlpha = (1-t)*0.9;
+    ctx.strokeStyle = ex.color;
+    ctx.lineWidth   = ex.big ? 2.5 : 1.5;
+    ctx.beginPath(); ctx.arc(ex.x, ex.y, r, 0, Math.PI*2); ctx.stroke();
+    ctx.beginPath(); ctx.arc(ex.x, ex.y, r*0.55, 0, Math.PI*2); ctx.stroke();
+    ctx.fillStyle = ex.color;
+    for (let i = 0; i < 6; i++) {
+      const a = (i/6)*Math.PI*2 + ex.t*0.12;
+      const d = r*(0.4+Math.random()*0.5);
+      ctx.fillRect(ex.x+Math.cos(a)*d-1, ex.y+Math.sin(a)*d-1, 2, 2);
+    }
+    ctx.globalAlpha = 1;
+  });
+}
+
+function drawHUDLine() {
+  // Bottom divider
+  ctx.strokeStyle = '#223'; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(0, CH-28); ctx.lineTo(CW, CH-28); ctx.stroke();
+  // Enemy count
+  const alive = enemies.filter(e => e.state!=='dead').length;
+  ctx.fillStyle = '#446644'; ctx.font = '8px "Courier New"'; ctx.textAlign = 'left';
+  ctx.fillText(`ENEMIES: ${alive}`, 10, CH-14);
+  if (player.dual) {
+    ctx.fillStyle = '#44ccff'; ctx.textAlign = 'right';
+    ctx.fillText('DUAL FIGHTER', CW-10, CH-14);
+  }
+}
+
+function overlay(title, lines) {
+  ctx.fillStyle = 'rgba(0,0,0,0.78)'; ctx.fillRect(0,0,CW,CH);
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#ff4488';
+  ctx.font = 'bold 26px "Courier New"';
+  ctx.shadowBlur = 18; ctx.shadowColor = '#ff4488';
+  ctx.fillText(title, CW/2, CH/2-72);
+  ctx.shadowBlur = 0;
+  ctx.font = '13px "Courier New"';
+  lines.forEach((line, i) => {
+    ctx.fillStyle = i===0 ? '#ffaacc' : '#774455';
+    ctx.fillText(line, CW/2, CH/2-18 + i*25);
+  });
+}
+
+// ── Boot ──────────────────────────────────────────────────────────────────────
+makeStars();
+updateHUD();
+requestAnimationFrame(ts => { lastTs = ts; requestAnimationFrame(loop); });
+</script>
+</body>
+</html>

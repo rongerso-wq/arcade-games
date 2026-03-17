@@ -1,0 +1,1007 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>SUPER MARIO — Classic 1985</title>
+  <link rel="stylesheet" href="cabinet.css">
+  <style>
+    :root {
+      --stripe1: #ff4400;
+      --stripe2: #cc0000;
+      --marquee-bg: linear-gradient(90deg, #330000, #660000, #330000);
+      --marquee-border: #ff4400;
+      --marquee-glow: rgba(255,68,0,0.6);
+      --marquee-color: #ff8844;
+    }
+    #ui, #info { display:none; }
+    canvas { display:block; image-rendering:pixelated; }
+  </style>
+</head>
+<body>
+<div id="ui"></div>
+<div class="cabinet-wrap">
+  <div class="cab-marquee">
+    <div class="cab-marquee-title">★ SUPER MARIO BROS ★</div>
+    <div class="cab-marquee-sub">NINTENDO · 1985</div>
+  </div>
+  <div class="cab-scores">
+    <span class="s-label">SCORE </span><span class="s-val" id="score">000000</span>
+    &nbsp;&nbsp;
+    <span class="s-label">COINS </span><span class="s-val" id="coins">×00</span>
+    &nbsp;&nbsp;
+    <span class="s-label">WORLD </span><span class="s-val" id="world">1-1</span>
+    &nbsp;&nbsp;
+    <span class="s-label">TIME </span><span class="s-val" id="timer">400</span>
+    &nbsp;&nbsp;
+    <span class="s-label">LIVES </span><span class="s-val" id="lives">♥ ♥ ♥</span>
+  </div>
+  <div class="cab-monitor">
+    <canvas id="canvas"></canvas>
+  </div>
+  <div class="cab-controls">
+    <div class="cab-buttons">
+      <div class="cab-stick"></div>
+      <div class="cab-btn red"></div>
+      <div class="cab-btn yellow"></div>
+    </div>
+    <div class="cab-help">← → MOVE &nbsp;·&nbsp; Z / SPACE = JUMP &nbsp;·&nbsp; SPACE = START</div>
+    <div class="cab-coin">INSERT COIN</div>
+    <a class="cab-back" href="arcade.html">◀ ARCADE</a>
+  </div>
+</div>
+<div id="info"></div>
+
+<script>
+// ══════════════════════════════════════════════════════════════
+//  SUPER MARIO BROS — Enhanced Graphics Edition
+// ══════════════════════════════════════════════════════════════
+const CW = 512, CH = 400;
+const canvas = document.getElementById('canvas');
+const ctx    = canvas.getContext('2d');
+canvas.width = CW; canvas.height = CH;
+
+const TILE  = 16;
+const SCALE = 2.5;
+const GW    = Math.ceil(CW / SCALE);
+const GH    = Math.ceil(CH / SCALE);
+
+// ── Audio ──────────────────────────────────────────────────────
+const AC = new (window.AudioContext || window.webkitAudioContext)();
+function note(freq, start, dur, type='square', vol=0.12) {
+  const o = AC.createOscillator(), g = AC.createGain();
+  o.connect(g); g.connect(AC.destination);
+  o.type = type; o.frequency.value = freq;
+  g.gain.setValueAtTime(vol, AC.currentTime + start);
+  g.gain.exponentialRampToValueAtTime(0.001, AC.currentTime + start + dur);
+  o.start(AC.currentTime + start); o.stop(AC.currentTime + start + dur + 0.01);
+}
+function sndJump()    { note(500,0,0.08,'square',0.12); note(650,0.06,0.1,'square',0.1); }
+function sndCoin()    { note(988,0,0.06,'square',0.12); note(1319,0.07,0.13,'square',0.12); }
+function sndBump()    { note(120,0,0.09,'sawtooth',0.15); }
+function sndStomp()   { note(200,0,0.05,'square',0.18); note(80,0.04,0.08,'sawtooth',0.15); }
+function sndDead()    { [494,370,294,220].forEach((f,i)=>note(f,i*0.1,0.09,'sawtooth',0.15)); }
+function sndPowerup() { [659,784,988,1047].forEach((f,i)=>note(f,i*0.08,0.07,'square',0.13)); }
+function sndFlagpole(){ [523,659,784,1047,1319].forEach((f,i)=>note(f,i*0.1,0.12,'square',0.13)); }
+
+// ── PALETTE ────────────────────────────────────────────────────
+const P = {
+  // Sky
+  skyTop:'#09093d', skyMid:'#1a3a8c', skyBot:'#5c94fc',
+  // Ground
+  gndTop:'#c84c0c', gndMid:'#e06010', gndLo:'#a03808', gndDk:'#702808',
+  // Brick
+  brkDk:'#802818', brk:'#b44828', brkMd:'#c85030', brkHi:'#e87048', brkMort:'#d04830',
+  // ? block
+  qDk:'#b86800', q:'#e89000', qLt:'#f0b020', qHi:'#fff080',
+  // Hard block
+  hdDk:'#606060', hd:'#989898', hdLt:'#c8c8c8',
+  // Pipe
+  ppDk:'#005800', pp:'#008800', ppLt:'#00b800', ppHi:'#40e040', ppRim:'#00d000',
+  // Mario reds
+  mHDk:'#8a1000', mH:'#cc2000', mHLt:'#ee3822',
+  // Mario skin
+  mSDk:'#b06030', mS:'#e89060', mSLt:'#f8b888',
+  // Mario hair/shoes
+  mBDk:'#280c00', mB:'#401800', mBLt:'#602800',
+  // Mario overalls
+  mODk:'#001088', mO:'#1428cc', mOLt:'#2848ee',
+  // Mario belt/buttons
+  mY:'#f8c000',
+  // Mario mustache
+  mMus:'#904020',
+  // Goomba
+  gbDk:'#603000', gb:'#c07020', gbLt:'#e09040', gbFt:'#402800', gbEy:'#f8f8c0',
+  // Koopa
+  kpDk:'#005800', kp:'#28922c', kpLt:'#40c040', kpShDk:'#c8a000', kpSh:'#f0cc00', kpShLt:'#fff080', kpSk:'#f8e8a0',
+  // Misc
+  coin:'#f8d000', coinLt:'#fff880', coinDk:'#c89800',
+  mush:'#e83020', mushLt:'#ff6050', mushDk:'#a81810', mushSp:'#ffffff',
+  cloud:'#ffffff', cloudSh:'#c8d8f8',
+  hillDk:'#005000', hill:'#009000', hillLt:'#20b820', hillTp:'#30d040',
+  bushDk:'#004800', bush:'#007800', bushLt:'#18a818',
+  flagGrn:'#00cc00',
+  white:'#ffffff', black:'#000000',
+};
+
+// ── Pre-render sprites using OffscreenCanvas ───────────────────
+// px() helper: stamp colored pixel rects on an OffscreenCanvas
+function buildSprite(w, h, drawFn) {
+  const oc = new OffscreenCanvas(w, h);
+  const c  = oc.getContext('2d');
+  c.clearRect(0,0,w,h);
+  const px = (col,x,y,pw=1,ph=1) => { c.fillStyle=col; c.fillRect(x,y,pw,ph); };
+  drawFn(px, c, w, h);
+  return oc;
+}
+
+// Each sprite = 1 world-pixel per pixel, rendered at SCALE
+// ── Mario Small frames (12×16) ─────────────────────────────────
+function drawMarioSmallSprite(px, frame) {
+  // frame 0=stand, 1=walk1, 2=walk2, 3=jump
+  const {mH,mHDk,mHLt,mS,mSDk,mSLt,mB,mBDk,mBLt,mO,mODk,mOLt,mY,mMus,white,black} = P;
+  // Hat
+  px(mH,   3,0, 5,1); px(mHDk,3,0,1,1); px(mHLt,7,0,1,1);
+  px(mH,   2,1, 7,1); px(mHDk,2,1,1,1); px(mHLt,8,1,1,1);
+  px(mH,   1,2, 9,1); px(mHDk,1,2,1,1); px(mHLt,9,2,1,1);
+  // Hair/sideburn
+  px(mB,   1,3,1,2); px(mBLt,2,3,1,1);
+  // Face
+  px(mS,   2,3, 8,2);  px(mSDk,2,4,1,1); px(mSLt,3,3,1,1);
+  // Eyes
+  px(black,5,3,1,1); px(white,6,3,1,1);
+  px(black,6,3,1,1);
+  // Nose
+  px(mSDk, 6,4,2,1);
+  // Mustache
+  px(mMus, 3,5,7,1); px(mB,4,5,1,1); px(mB,8,5,1,1);
+  // Ear
+  px(mS,   1,4,1,1);
+  // Shirt / body (red)
+  px(mHLt, 3,6,5,1);
+  px(mH,   2,7,7,2); px(mHDk,2,7,1,2); px(mHLt,8,7,1,2);
+  // Overalls bib
+  px(mO,   4,7,3,2); px(mODk,4,7,1,2); px(mOLt,6,7,1,2);
+  // Buttons
+  px(mY,   3,8,1,1); px(mY,7,8,1,1);
+  // Belt
+  px(mBDk, 2,9,7,1);
+  // Shorts/legs overalls
+  px(mO,   2,10,3,2); px(mODk,2,10,1,2);
+  px(mO,   6,10,3,2); px(mODk,6,10,1,2);
+  px(mH,   5,10,1,2); // gap
+  // Feet based on frame
+  if(frame===3) { // jump
+    px(mBLt, 1,12,4,2); px(mB,1,12,1,2); px(mB,4,12,1,2);
+    px(mBLt, 6,12,4,2); px(mB,6,12,1,2); px(mB,9,12,1,2);
+    px(mB,   1,14,5,1); px(mB,5,14,5,1);
+  } else if(frame===1) {
+    px(mBLt, 1,12,4,2); px(mB,1,13,1,1);
+    px(mBLt, 7,11,4,2); px(mB,7,11,1,1);
+    px(mB,   1,14,5,1); px(mB,6,13,5,1);
+  } else if(frame===2) {
+    px(mBLt, 2,12,3,2); px(mB,2,12,1,1);
+    px(mBLt, 6,12,4,2); px(mB,6,12,1,1);
+    px(mB,   2,14,4,1); px(mB,6,14,4,1);
+  } else { // stand
+    px(mBLt, 2,12,3,2); px(mB,2,12,1,2);
+    px(mBLt, 6,12,3,2); px(mB,6,12,1,2);
+    px(mB,   1,14,5,1); px(mB,6,14,4,1);
+  }
+}
+function drawMarioSmallDead(px) {
+  const {mH,mHDk,mHLt,mS,mSDk,mB,mBLt,mO,mODk,mMus,white,black}=P;
+  px(mH,3,0,5,1); px(mH,2,1,7,1); px(mH,1,2,9,1);
+  px(mB,1,3,1,2); px(mS,2,3,8,2); px(black,5,3,2,2);
+  px(mMus,3,5,7,1);
+  px(mH,2,6,7,3); px(mO,4,6,3,2);
+  px(mO,2,9,3,3); px(mO,6,9,3,3); px(mH,5,9,1,3);
+  px(mBLt,1,10,4,2); px(mBLt,6,10,4,2);
+}
+
+function buildMarioSmall() {
+  return [0,1,2,3,'dead'].map(frame => buildSprite(12,16,(px)=>{
+    if(frame==='dead') drawMarioSmallDead(px);
+    else drawMarioSmallSprite(px, frame);
+  }));
+}
+
+// ── Mario Big frames (12×24) ────────────────────────────────────
+function buildMarioBig() {
+  return [0,1,2,3].map(frame => buildSprite(12,24,(px)=>{
+    const {mH,mHDk,mHLt,mS,mSDk,mB,mBDk,mBLt,mO,mODk,mOLt,mY,mMus,white,black}=P;
+    // Hat
+    px(mH,3,0,5,1); px(mHDk,3,0,1,1); px(mHLt,7,0,1,1);
+    px(mH,2,1,7,1); px(mHDk,2,1,1,1);
+    px(mH,1,2,9,1); px(mHDk,1,2,1,1);
+    // Hair
+    px(mB,1,3,1,3); px(mBLt,2,3,1,1);
+    // Face
+    px(mS,2,3,8,3); px(mSDk,2,5,1,1); px(mSLt,3,3,1,1);
+    px(black,5,4,2,2); px(white,6,4,1,1);
+    px(mSDk,5,5,3,1);
+    // Mustache
+    px(mMus,3,6,7,1); px(mB,4,6,1,1); px(mB,8,6,1,1);
+    // Ear
+    px(mS,1,4,1,2);
+    // Shirt
+    px(mHLt,3,7,5,1);
+    px(mH,2,8,7,3); px(mHDk,2,8,1,3); px(mHLt,8,8,1,3);
+    // Overalls bib
+    px(mO,4,8,3,3); px(mODk,4,8,1,3); px(mOLt,6,8,1,3);
+    px(mY,3,9,1,1); px(mY,7,9,1,1);
+    // Belt
+    px(mBDk,2,11,7,1);
+    // Lower body
+    px(mO,1,12,4,3); px(mODk,1,12,1,3);
+    px(mO,6,12,4,3); px(mODk,6,12,1,3);
+    px(mH,5,12,1,3);
+    // Knees
+    px(mO,2,15,3,2); px(mODk,2,15,1,2);
+    px(mO,6,15,3,2); px(mODk,6,15,1,2);
+    px(mH,5,15,1,2);
+    // Feet
+    if(frame===3){
+      px(mBLt,0,17,5,2); px(mB,0,17,1,2);
+      px(mBLt,6,17,5,2); px(mB,6,17,1,2);
+      px(mB,0,19,6,1); px(mB,6,19,5,1);
+    } else if(frame===1){
+      px(mBLt,0,17,5,2); px(mB,0,18,1,1);
+      px(mBLt,7,16,4,2); px(mB,7,16,1,1);
+      px(mB,0,19,6,1); px(mB,7,18,4,1);
+    } else if(frame===2){
+      px(mBLt,1,17,4,2); px(mB,1,17,1,1);
+      px(mBLt,6,17,5,2); px(mB,6,17,1,1);
+      px(mB,0,19,5,1); px(mB,6,19,5,1);
+    } else {
+      px(mBLt,1,17,4,2); px(mB,1,17,1,2);
+      px(mBLt,6,17,4,2); px(mB,6,17,1,2);
+      px(mB,0,19,6,1); px(mB,6,19,5,1);
+    }
+  }));
+}
+
+// ── Goomba sprites (12×12) ─────────────────────────────────────
+function buildGoomba() {
+  return [0,1].map(walk => buildSprite(12,12,(px)=>{
+    const {gbDk,gb,gbLt,gbFt,gbEy,black,white}=P;
+    // Body
+    px(gb,1,2,10,7); px(gbDk,1,2,1,7); px(gbLt,10,2,1,7);
+    px(gbDk,1,4,1,3); px(gbLt,10,4,1,3); // shading side
+    // Head
+    px(gb,2,0,8,3); px(gbDk,2,0,1,3); px(gbLt,9,0,1,3);
+    // Brow (angry)
+    px(gbDk,2,0,2,1); px(gbDk,8,0,2,1);
+    // Eyes
+    px(gbEy,2,1,3,2); px(gbEy,7,1,3,2);
+    px(black,3,2,2,1); px(black,7,2,2,1);
+    // Pupils
+    px(white,3,2,1,1); px(white,7,2,1,1);
+    // Mouth frown
+    px(gbDk,3,4,1,1); px(gbDk,8,4,1,1);
+    px(gbDk,4,5,4,1);
+    // Feet
+    if(walk===0){ px(gbFt,0,9,5,3); px(gbDk,7,10,5,2); }
+    else        { px(gbFt,0,10,5,2); px(gbDk,7,9,5,3); }
+    // Foot highlight
+    px(gbLt,1,9,2,1); px(gbLt,8,9,2,1);
+  }));
+}
+const GOOMBA_FLAT = buildSprite(12,6,(px)=>{
+  const {gbDk,gb,gbLt,gbFt,gbEy,black}=P;
+  px(gb,0,1,12,4); px(gbDk,0,1,1,4); px(gbLt,11,1,1,4);
+  px(gbDk,2,2,3,1); px(gbDk,7,2,3,1);
+  px(gbFt,0,0,5,2); px(gbFt,7,0,5,2);
+});
+
+// ── Koopa sprites (12×16) ──────────────────────────────────────
+function buildKoopa() {
+  return [0,1].map(walk => buildSprite(12,16,(px)=>{
+    const {kpDk,kp,kpLt,kpShDk,kpSh,kpShLt,kpSk,white,black}=P;
+    // Shell
+    px(kpSh,2,4,8,8); px(kpShDk,2,4,1,8); px(kpShLt,9,4,1,8);
+    px(kpSh,3,3,6,1); px(kpSh,3,12,6,1);
+    // Shell pattern (hex lines)
+    px(kpShDk,4,6,4,1); px(kpShDk,3,9,6,1);
+    px(kpShDk,5,5,1,5); px(kpShDk,8,5,1,5);
+    px(kpShLt,6,5,2,1);
+    // Neck/head
+    px(kp,4,1,4,3); px(kpDk,4,1,1,3); px(kpLt,7,1,1,3);
+    // Eye
+    px(white,7,1,3,3); px(black,8,2,2,2); px(white,9,2,1,1);
+    // Mouth
+    px(kpDk,4,3,3,1);
+    // Feet
+    if(walk===0){
+      px(kp,0,12,4,4); px(kpDk,0,12,1,4); px(kpLt,3,12,1,2);
+      px(kp,7,12,4,4); px(kpDk,7,12,1,4); px(kpLt,10,12,1,2);
+    } else {
+      px(kp,0,11,4,4); px(kpDk,0,11,1,4);
+      px(kp,8,13,4,3); px(kpDk,8,13,1,3);
+    }
+  }));
+}
+const KOOPA_SHELL = buildSprite(12,10,(px)=>{
+  const {kpShDk,kpSh,kpShLt}=P;
+  px(kpSh,1,0,10,9); px(kpShDk,1,0,1,9); px(kpShLt,10,0,1,9);
+  px(kpSh,2,9,8,1);
+  px(kpShDk,3,2,6,1); px(kpShDk,2,5,8,1);
+  px(kpShDk,4,1,1,7); px(kpShDk,8,1,1,7);
+  px(kpShLt,5,2,2,1); px(kpShLt,2,1,2,1);
+});
+
+// ── Mushroom (12×14) ───────────────────────────────────────────
+const MUSHROOM_SPR = buildSprite(12,14,(px)=>{
+  const {mush,mushLt,mushDk,mushSp,white,black}=P;
+  // Cap arc
+  px(mushDk,3,0,6,1);
+  px(mushDk,1,1,10,1); px(mush,2,1,8,1);
+  px(mushDk,0,2,12,1); px(mush,1,2,10,1); px(mushLt,2,2,2,1);
+  px(mush,0,3,12,3); px(mushLt,1,3,2,2);
+  px(mush,0,5,12,2); px(mushDk,0,6,12,1);
+  // White spots
+  px(white,2,2,2,3); px(white,8,3,2,3);
+  px(white,5,1,2,2);
+  // Stem
+  px(mushSp,2,7,8,6); px(mushDk,2,7,1,6); px(mushLt,9,7,1,6);
+  px(white,3,7,2,1); px(white,3,9,1,1);
+  // Eyes
+  px(black,4,9,2,2); px(black,7,9,2,2);
+  px(white,5,9,1,1); px(white,8,9,1,1);
+});
+
+// Pre-build all sprites
+const SPR_MARIO_SM   = buildMarioSmall();   // [0..3, 'dead'→idx4]
+const SPR_MARIO_BIG  = buildMarioBig();     // [0..3]
+const SPR_GOOMBA     = buildGoomba();       // [0,1]
+const SPR_KOOPA      = buildKoopa();        // [0,1]
+
+// ── Coin sparkle (6×6) ─────────────────────────────────────────
+const COIN_SPR = buildSprite(7,10,(px)=>{
+  const {coin,coinLt,coinDk}=P;
+  px(coinDk,2,0,3,1); px(coin,1,1,5,2); px(coinLt,2,1,2,1);
+  px(coin,1,3,5,1); px(coinLt,2,3,1,1);
+  px(coin,0,4,7,2); px(coinLt,1,4,2,1); px(coinDk,0,4,1,2);
+  px(coin,1,6,5,2); px(coinLt,2,6,2,1);
+  px(coinDk,2,8,3,1); px(coin,1,8,5,1); px(coinLt,2,8,1,1);
+});
+
+// ══════════════════════════════════════════════════════════════
+//  LEVEL
+// ══════════════════════════════════════════════════════════════
+const LEVEL_W=212, LEVEL_H=15;
+const LEVEL=[
+  '____________________________________________________________________________________________________________________________________________________________________________________________________________________',
+  '____________________________________________________________________________________________________________________________________________________________________________________________________________________',
+  '____________________________________________________________________________________________________________________________________________________________________________________________________________________',
+  '____________________________________________________________________________________________________________________________________________________________________________________________________________________',
+  '______________Q______________________B_B_B_______________________Q___________________________________________QQQ__________________________________________Q________________________________Q____________________',
+  '____________________________________________________QBQBQ________________________________________________BQBQB______________________________________________________________________________________________Q_______________________________',
+  '________________Q_______________________________________________________________________________________________________________________________________________B_B_B_B_B_B__________________________________',
+  '________________________________________1__________________________________1__________1__________1________________________1_____________________1____________________________2_______________________________1____',
+  '____________________________________PP_______________________________________PP_______________PP____PP_______________________PP_PP_________________________PP_____________PP__________________________________',
+  '____________________________________TT_______________________________________TT_______________TT____TT_______________________TT_TT_________________________TT_____________TT__________________________________',
+  'GGGGGGGGGGGGGG______GGGGGGGGGGGGGGGGGGGGGGGGGG______GGGGGGGGGGGGGGGGGGGGGGGGGGGGGG______GGGGGGGGGGGGG______GGGGGGGGGGGGGGGGG____________GGGGGGGGGGGGGGGGGGGGGGGGGGGGG______GGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGG_F',
+  'GGGGGGGGGGGGGG______GGGGGGGGGGGGGGGGGGGGGGGGGG______GGGGGGGGGGGGGGGGGGGGGGGGGGGGGG______GGGGGGGGGGGGG______GGGGGGGGGGGGGGGGG____________GGGGGGGGGGGGGGGGGGGGGGGGGGGGG______GGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGG_G',
+  'GGGGGGGGGGGGGG______GGGGGGGGGGGGGGGGGGGGGGGGGG______GGGGGGGGGGGGGGGGGGGGGGGGGGGGGG______GGGGGGGGGGGGG______GGGGGGGGGGGGGGGGG____________GGGGGGGGGGGGGGGGGGGGGGGGGGGGG______GGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGG_G',
+  'GGGGGGGGGGGGGG______GGGGGGGGGGGGGGGGGGGGGGGGGG______GGGGGGGGGGGGGGGGGGGGGGGGGGGGGG______GGGGGGGGGGGGG______GGGGGGGGGGGGGGGGG____________GGGGGGGGGGGGGGGGGGGGGGGGGGGGG______GGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGG_G',
+  'GGGGGGGGGGGGGG______GGGGGGGGGGGGGGGGGGGGGGGGGG______GGGGGGGGGGGGGGGGGGGGGGGGGGGGGG______GGGGGGGGGGGGG______GGGGGGGGGGGGGGGGG____________GGGGGGGGGGGGGGGGGGGGGGGGGGGGG______GGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGG_G',
+].join('\n').split('\n');
+
+function tileAt(tx,ty){ if(ty<0||ty>=LEVEL_H||tx<0||tx>=LEVEL_W) return '_'; return LEVEL[ty][tx]||'_'; }
+function isSolid(tx,ty){ return 'GBQHPT'.includes(tileAt(tx,ty)); }
+
+// ── State ──────────────────────────────────────────────────────
+let state='start', stateTimer=0;
+let score=0, coins=0, lives=3, world='1-1', timeLeft=400;
+let timeTimer=0, cameraX=0;
+let particles=[], scorePopups=[], qHit={};
+
+let mario={x:32,y:0,vx:0,vy:0,w:12,h:16,onGround:false,dir:1,running:false,frame:0,frameTimer:0,dead:false,deadTimer:0,big:false,invincible:0};
+let enemies=[], items=[];
+let flagPole={x:0,hit:false}, flagY=0, flagDown=false;
+
+// ── Input ──────────────────────────────────────────────────────
+const keys={};
+document.addEventListener('keydown',e=>{
+  keys[e.code]=true;
+  if(['ArrowLeft','ArrowRight','ArrowUp','Space'].includes(e.code)) e.preventDefault();
+  if(['Space','ArrowUp','KeyZ','KeyA'].includes(e.code)){
+    AC.resume();
+    if(state==='start'||state==='win') startGame();
+    else if(state==='gameover') resetGame();
+    else if(state==='play') tryJump();
+  }
+});
+document.addEventListener('keyup',e=>{ keys[e.code]=false; });
+canvas.addEventListener('click',()=>{ AC.resume(); if(state!=='play') startGame(); });
+
+function tryJump(){
+  if(mario.onGround&&!mario.dead){ mario.vy=mario.big?-5.8:-5.5; mario.onGround=false; sndJump(); }
+}
+
+// ── Physics ────────────────────────────────────────────────────
+const GRAVITY=0.32, MAX_FALL=6, MAX_RUN=2.8;
+
+function spawnEnemies(){
+  enemies=[];
+  for(let ty=0;ty<LEVEL_H;ty++) for(let tx=0;tx<LEVEL_W;tx++){
+    const t=tileAt(tx,ty);
+    if(t==='1') enemies.push({type:'goomba',x:tx*TILE+2,y:ty*TILE,w:12,h:12,vx:-0.6,vy:0,alive:true,flat:false,flatTimer:0,wframe:0,wt:0});
+    else if(t==='2') enemies.push({type:'koopa',x:tx*TILE+0,y:ty*TILE,w:12,h:16,vx:-0.5,vy:0,alive:true,shell:false,shellVx:0,wframe:0,wt:0});
+  }
+  for(let tx=0;tx<LEVEL_W;tx++) if(tileAt(tx,10)==='F'){flagPole.x=tx*TILE;flagPole.hit=false;break;}
+  flagY=0; flagDown=false;
+}
+
+function startGame(){
+  state='play'; stateTimer=0; timeLeft=400; timeTimer=0;
+  cameraX=0; qHit={}; particles=[]; scorePopups=[]; items=[];
+  mario.x=32; mario.y=144; mario.vx=0; mario.vy=0;
+  mario.dead=false; mario.deadTimer=0; mario.big=false;
+  mario.onGround=false; mario.invincible=0; mario.frame=0;
+  spawnEnemies(); updateUI();
+}
+function resetGame(){ score=0; coins=0; lives=3; startGame(); }
+
+function updateMario(){
+  if(mario.dead){
+    mario.deadTimer++;
+    if(mario.deadTimer===30) mario.vy=-7;
+    mario.vy+=0.3; mario.y+=mario.vy;
+    if(mario.deadTimer>90){ lives--; if(lives<=0){state='gameover';updateUI();}else{state='dead';stateTimer=0;setTimeout(()=>{if(state==='dead')startGame();},1500);} }
+    return;
+  }
+  if(mario.invincible>0) mario.invincible--;
+  let ax=0;
+  if(keys['ArrowLeft']||keys['KeyA']){ax=-0.5;mario.dir=-1;mario.running=true;}
+  else if(keys['ArrowRight']||keys['KeyD']){ax=0.5;mario.dir=1;mario.running=true;}
+  else{mario.running=false;ax=mario.vx>0?-0.35:mario.vx<0?0.35:0;}
+  mario.vx+=ax; mario.vx=Math.max(-MAX_RUN,Math.min(MAX_RUN,mario.vx));
+  if(!mario.running&&Math.abs(mario.vx)<0.12) mario.vx=0;
+  if(!(keys['KeyZ']||keys['KeyA']||keys['ArrowUp']||keys['Space'])&&mario.vy<-2) mario.vy=Math.max(mario.vy+0.6,-2);
+  mario.vy=Math.min(mario.vy+GRAVITY,MAX_FALL);
+  mario.x+=mario.vx; mario.x=Math.max(0,mario.x); resolveX(mario);
+  mario.y+=mario.vy; mario.onGround=false; resolveY(mario);
+  cameraX=Math.max(0,Math.min(LEVEL_W*TILE-GW,mario.x-GW/2+mario.w/2));
+  if(mario.onGround&&Math.abs(mario.vx)>0.2){mario.frameTimer++;if(mario.frameTimer>=6){mario.frameTimer=0;mario.frame=(mario.frame+1)%3;}}
+  else if(mario.onGround) mario.frame=0;
+  if(mario.y>LEVEL_H*TILE+20) killMario();
+}
+
+function resolveX(e){
+  const tx0=Math.floor(e.x/TILE),tx1=Math.floor((e.x+e.w-1)/TILE);
+  const ty0=Math.floor(e.y/TILE),ty1=Math.floor((e.y+e.h-1)/TILE);
+  for(let ty=ty0;ty<=ty1;ty++){
+    if(e.vx>0&&isSolid(tx1,ty)){e.x=tx1*TILE-e.w;e.vx=0;break;}
+    if(e.vx<0&&isSolid(tx0,ty)){e.x=(tx0+1)*TILE;e.vx=0;break;}
+  }
+}
+function resolveY(e){
+  const tx0=Math.floor(e.x/TILE),tx1=Math.floor((e.x+e.w-1)/TILE);
+  const ty0=Math.floor(e.y/TILE),ty1=Math.floor((e.y+e.h-1)/TILE);
+  if(e.vy>0){for(let tx=tx0;tx<=tx1;tx++){if(isSolid(tx,ty1)){e.y=ty1*TILE-e.h;e.vy=0;if(e===mario)mario.onGround=true;return;}}}
+  else if(e.vy<0){for(let tx=tx0;tx<=tx1;tx++){if(isSolid(tx,ty0)){e.y=(ty0+1)*TILE;e.vy=0;if(e===mario)hitBlockAbove(tx0,ty0,tx1);return;}}}
+}
+
+function hitBlockAbove(tx0,ty,tx1){
+  for(let tx=tx0;tx<=tx1;tx++){
+    const t=tileAt(tx,ty);
+    if(t==='Q'&&!qHit[`${tx},${ty}`]){
+      qHit[`${tx},${ty}`]=true; sndCoin();
+      addScore(200,tx*TILE+8,ty*TILE); coins++; updateUI();
+      spawnCoinParticle(tx*TILE+8, ty*TILE);
+    } else if(t==='B'){
+      if(mario.big){
+        LEVEL[ty]=LEVEL[ty].substr(0,tx)+'_'+LEVEL[ty].substr(tx+1);
+        sndBump(); spawnParticles(tx*TILE+8,ty*TILE,P.brkHi,12); addScore(50,tx*TILE+8,ty*TILE);
+      } else { sndBump(); spawnParticles(tx*TILE+8,ty*TILE,P.brkMd,5); }
+    }
+  }
+}
+
+function addScore(pts,wx,wy){ score+=pts; if(score>9999999)score=9999999; scorePopups.push({x:wx,y:wy,val:'+'+pts,life:1.2}); updateUI(); }
+function killMario(){ if(mario.dead)return; if(mario.invincible>0&&mario.big){mario.big=false;mario.invincible=90;return;} mario.dead=true;mario.deadTimer=0;mario.vy=-5;sndDead(); }
+
+function updateEnemies(){
+  for(const e of enemies){
+    if(!e.alive)continue;
+    if(e.x<cameraX-TILE*2||e.x>cameraX+GW+TILE*2)continue;
+    e.vy=Math.min(e.vy+GRAVITY,MAX_FALL);
+    if(e.type==='goomba'||e.type==='koopa'&&!e.shell){
+      e.x+=e.vx; resolveEnemyX(e); e.y+=e.vy; resolveEnemyY(e);
+      e.wt++; if(e.wt>=10){e.wt=0;e.wframe=(e.wframe+1)%2;}
+    } else if(e.type==='koopa'&&e.shell){
+      e.x+=e.shellVx; resolveEnemyX(e); e.y+=e.vy; resolveEnemyY(e);
+    }
+    if(e.flat){e.flatTimer++;if(e.flatTimer>30)e.alive=false;}
+    if(e.y>LEVEL_H*TILE+20)e.alive=false;
+    if(!mario.dead&&mario.invincible===0&&rectsOverlap(mario,e)){
+      if(mario.vy>0&&mario.y+mario.h<e.y+e.h*0.6){
+        if(e.type==='goomba'){e.flat=true;e.flatTimer=0;e.vx=0;}
+        else if(e.type==='koopa'&&!e.shell){e.shell=true;e.shellVx=0;e.h=10;e.y+=6;}
+        else if(e.type==='koopa'&&e.shell){e.shellVx=mario.x<e.x?4:-4;}
+        mario.vy=-3.5; sndStomp(); addScore(100,e.x+6,e.y); spawnParticles(e.x+6,e.y,P.gbLt,7);
+      } else if(!e.flat){ killMario(); }
+    }
+    if(e.type==='koopa'&&e.shell&&Math.abs(e.shellVx)>0){
+      for(const e2 of enemies){if(e2===e||!e2.alive||e2.flat)continue;if(rectsOverlap(e,e2)){e2.alive=false;addScore(200,e2.x+6,e2.y);spawnParticles(e2.x+6,e2.y,P.gbLt,7);}}
+    }
+  }
+}
+
+function resolveEnemyX(e){
+  const tx0=Math.floor(e.x/TILE),tx1=Math.floor((e.x+e.w-1)/TILE),ty=Math.floor(e.y/TILE+0.5);
+  if(isSolid(tx1,ty)){e.x=tx1*TILE-e.w;e.vx*=-1;if(e.shellVx)e.shellVx*=-1;}
+  if(isSolid(tx0,ty)){e.x=(tx0+1)*TILE;e.vx*=-1;if(e.shellVx)e.shellVx*=-1;}
+}
+function resolveEnemyY(e){
+  const tx0=Math.floor(e.x/TILE),tx1=Math.floor((e.x+e.w-1)/TILE),ty1=Math.floor((e.y+e.h)/TILE);
+  if(e.vy>=0)for(let tx=tx0;tx<=tx1;tx++)if(isSolid(tx,ty1)){e.y=ty1*TILE-e.h;e.vy=0;return;}
+}
+function rectsOverlap(a,b){ return a.x+2<b.x+b.w-2&&a.x+a.w-2>b.x+2&&a.y+2<b.y+b.h-2&&a.y+a.h-2>b.y+2; }
+
+function updateItems(){
+  for(let i=items.length-1;i>=0;i--){
+    const it=items[i];
+    it.vy=Math.min(it.vy+GRAVITY,MAX_FALL); it.x+=it.vx; resolveItemX(it); it.y+=it.vy; resolveItemY(it);
+    if(rectsOverlap(mario,it)){
+      if(it.type==='mushroom'){mario.big=true;sndPowerup();addScore(1000,it.x,it.y);spawnParticles(it.x+6,it.y,P.mush,10);}
+      else{coins++;sndCoin();addScore(200,it.x,it.y);updateUI();}
+      items.splice(i,1);
+    }
+    if(it.y>LEVEL_H*TILE+20)items.splice(i,1);
+  }
+}
+function resolveItemX(e){const tx0=Math.floor(e.x/TILE),tx1=Math.floor((e.x+e.w-1)/TILE),ty=Math.floor((e.y+e.h/2)/TILE);if(isSolid(tx1,ty)){e.x=tx1*TILE-e.w;e.vx*=-1;}if(isSolid(tx0,ty)){e.x=(tx0+1)*TILE;e.vx*=-1;}}
+function resolveItemY(e){const tx0=Math.floor(e.x/TILE),tx1=Math.floor((e.x+e.w-1)/TILE),ty1=Math.floor((e.y+e.h)/TILE);if(e.vy>=0)for(let tx=tx0;tx<=tx1;tx++)if(isSolid(tx,ty1)){e.y=ty1*TILE-e.h;e.vy=0;return;}}
+
+function updateFlag(){
+  if(!flagPole.hit&&!mario.dead){
+    const fx=flagPole.x+TILE*0.5;
+    if(mario.x+mario.w>=fx-2&&mario.x<=fx+6){flagPole.hit=true;flagDown=true;mario.vx=0;mario.vy=0;sndFlagpole();addScore(5000,mario.x,mario.y-10);}
+  }
+  if(flagDown){flagY=Math.min(flagY+1.5,TILE*8);if(flagY>=TILE*8){flagDown=false;setTimeout(()=>{state='win';stateTimer=0;updateUI();},1000);}}
+}
+
+function spawnParticles(x,y,color,n=8){
+  for(let i=0;i<n;i++){const a=Math.random()*Math.PI*2,s=1+Math.random()*2.5;particles.push({x,y,vx:Math.cos(a)*s,vy:Math.sin(a)*s-1.5,life:1,color,size:2+Math.random()*2});}
+}
+function spawnCoinParticle(x,y){
+  particles.push({x,y:y-2,vx:0,vy:-4,life:1,color:P.coin,size:5,isCoin:true});
+  for(let i=0;i<6;i++){const a=Math.random()*Math.PI*2;particles.push({x,y,vx:Math.cos(a)*1.5,vy:Math.sin(a)*1.5-1,life:0.7,color:P.coinLt,size:1.5});}
+}
+
+function update(){
+  stateTimer++;
+  if(state==='start'||state==='gameover'||state==='win'||state==='dead') return;
+  timeTimer++; if(timeTimer>=60){timeTimer=0;timeLeft=Math.max(0,timeLeft-1);updateUI();}
+  updateMario();
+  if(!flagPole.hit){updateEnemies();updateItems();}
+  updateFlag();
+  particles=particles.filter(p=>{p.x+=p.vx;p.y+=p.vy;p.vy+=p.isCoin?0.15:0.12;p.life-=0.025;return p.life>0;});
+  scorePopups=scorePopups.filter(p=>{p.y-=0.4;p.life-=0.025;return p.life>0;});
+}
+
+// ══════════════════════════════════════════════════════════════
+//  RENDER — enhanced graphics
+// ══════════════════════════════════════════════════════════════
+let skyGrad=null;
+function makeSkyGrad(){
+  if(skyGrad) return skyGrad;
+  skyGrad=ctx.createLinearGradient(0,0,0,CH);
+  skyGrad.addColorStop(0,  P.skyTop);
+  skyGrad.addColorStop(0.35,P.skyMid);
+  skyGrad.addColorStop(1,  P.skyBot);
+  return skyGrad;
+}
+
+// Parallax stars (only visible when sky is dark)
+const STARS=Array.from({length:35},()=>({x:Math.random()*LEVEL_W*TILE,y:Math.random()*60,r:Math.random()*0.8+0.3}));
+
+function render(){
+  // Sky gradient
+  ctx.fillStyle=makeSkyGrad();
+  ctx.fillRect(0,0,CW,CH);
+
+  ctx.save();
+  ctx.scale(SCALE,SCALE);
+  ctx.translate(-Math.round(cameraX),0);
+
+  drawParallaxBG();
+  drawTiles();
+  drawFlagpole();
+  drawItems();
+  drawEnemies();
+  drawMarioSprite();
+  drawParticleLayer();
+
+  ctx.restore();
+
+  // Score popups (screen space)
+  scorePopups.forEach(p=>{
+    ctx.globalAlpha=Math.min(p.life,0.9);
+    ctx.shadowBlur=6; ctx.shadowColor=P.coinLt;
+    ctx.fillStyle=p.val.startsWith('+5')? P.coinLt : P.white;
+    ctx.font=`bold ${Math.round(8*SCALE/2)}px monospace`;
+    ctx.textAlign='center';
+    ctx.fillText(p.val,(p.x-cameraX)*SCALE,p.y*SCALE);
+    ctx.shadowBlur=0;
+  });
+  ctx.globalAlpha=1;
+
+  drawScreenEffects();
+  drawHUD();
+}
+
+// ── Parallax background ────────────────────────────────────────
+function drawParallaxBG(){
+  const cx0=cameraX;
+  // Stars (parallax 0.1)
+  ctx.fillStyle='rgba(255,255,255,0.8)';
+  STARS.forEach(s=>{
+    const sx=(s.x-cx0*0.08)%(LEVEL_W*TILE);
+    if(sx>cx0-20&&sx<cx0+GW+20){
+      ctx.beginPath(); ctx.arc(sx,s.y,s.r,0,Math.PI*2); ctx.fill();
+    }
+  });
+
+  // Distant hills (parallax 0.25)
+  const hp=cx0*0.25;
+  [[10,120,45],[50,115,40],[100,118,38],[140,112,42],[185,120,44]].forEach(([hx,hy,hr])=>{
+    const sx=(hx*TILE-hp);
+    const grad=ctx.createRadialGradient(sx,hy,0,sx,hy,hr);
+    grad.addColorStop(0,P.hillLt); grad.addColorStop(0.5,P.hill); grad.addColorStop(1,P.hillDk);
+    ctx.fillStyle=grad;
+    ctx.beginPath(); ctx.arc(sx,hy,hr,Math.PI,0); ctx.closePath(); ctx.fill();
+    // Hill texture lines
+    ctx.strokeStyle=P.hillDk; ctx.lineWidth=0.5; ctx.globalAlpha=0.4;
+    ctx.beginPath(); ctx.moveTo(sx-hr*0.5,hy-hr*0.4); ctx.lineTo(sx+hr*0.2,hy-hr*0.7); ctx.stroke();
+    ctx.globalAlpha=1;
+  });
+
+  // Bushes (parallax 0.6)
+  const bp=cx0*0.6;
+  [[8,140],[28,142],[68,141],[108,140],[145,142],[180,141]].forEach(([bx,by])=>{
+    drawBush(bx*TILE-bp+cx0*0.6, by);
+  });
+
+  // Clouds (parallax 0.4)
+  const cp=cx0*0.4;
+  [[12,25],[38,20],[75,24],[118,22],[162,26],[200,20]].forEach(([cx2,cy])=>{
+    drawCloud(cx2*TILE-cp+cx0*0.4, cy);
+  });
+}
+
+function drawCloud(cx2,cy){
+  // Shadow layer
+  ctx.fillStyle=P.cloudSh;
+  ctx.beginPath(); ctx.ellipse(cx2,cy+4,13,7,0,0,Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.ellipse(cx2-10,cy+5,8,5,0,0,Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.ellipse(cx2+11,cy+5,9,5,0,0,Math.PI*2); ctx.fill();
+  // White top
+  ctx.fillStyle=P.cloud;
+  ctx.beginPath(); ctx.ellipse(cx2,cy,12,7,0,0,Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.ellipse(cx2-9,cy+2,7,5,0,0,Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.ellipse(cx2+10,cy+2,8,5,0,0,Math.PI*2); ctx.fill();
+}
+
+function drawBush(bx,by){
+  ctx.fillStyle=P.bushDk;
+  ctx.beginPath(); ctx.ellipse(bx,by+1,10,5,0,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle=P.bush;
+  ctx.beginPath(); ctx.ellipse(bx,by,9,5,0,0,Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.ellipse(bx-8,by+2,6,4,0,0,Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.ellipse(bx+8,by+2,7,4,0,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle=P.bushLt;
+  ctx.beginPath(); ctx.ellipse(bx-3,by-1,4,3,0,0,Math.PI*2); ctx.fill();
+}
+
+// ── Tile rendering ─────────────────────────────────────────────
+function drawTiles(){
+  const tx0=Math.max(0,Math.floor(cameraX/TILE)-1);
+  const tx1=Math.min(LEVEL_W-1,Math.ceil((cameraX+GW)/TILE)+1);
+  for(let ty=0;ty<LEVEL_H;ty++) for(let tx=tx0;tx<=tx1;tx++) drawTile(tileAt(tx,ty),tx*TILE,ty*TILE,tx,ty);
+}
+
+function drawTile(t,x,y,tx,ty){
+  switch(t){
+    case 'G': drawGroundTile(x,y,ty); break;
+    case 'B': drawBrickTile(x,y); break;
+    case 'Q': drawQTile(x,y,tx,ty); break;
+    case 'H': drawHardTile(x,y); break;
+    case 'T': drawPipeTop(x,y); break;
+    case 'P': drawPipeBody(x,y); break;
+  }
+}
+
+function drawGroundTile(x,y,ty){
+  // Base fill
+  ctx.fillStyle=P.gndMid; ctx.fillRect(x,y,TILE,TILE);
+  if(ty===10){
+    // Top surface: green strip
+    const g=ctx.createLinearGradient(x,y,x,y+5);
+    g.addColorStop(0,'#20cc20'); g.addColorStop(1,'#008800');
+    ctx.fillStyle=g; ctx.fillRect(x,y,TILE,5);
+    // Grass blades
+    ctx.fillStyle='#40ee40';
+    ctx.fillRect(x+2,y,2,2); ctx.fillRect(x+7,y-1,2,3); ctx.fillRect(x+12,y,2,2);
+    // Dirt gradient body
+    const d=ctx.createLinearGradient(x,y+5,x,y+TILE);
+    d.addColorStop(0,P.gndTop); d.addColorStop(1,P.gndDk);
+    ctx.fillStyle=d; ctx.fillRect(x,y+5,TILE,TILE-5);
+  } else {
+    const d=ctx.createLinearGradient(x,y,x,y+TILE);
+    d.addColorStop(0,P.gndMid); d.addColorStop(1,P.gndDk);
+    ctx.fillStyle=d; ctx.fillRect(x,y,TILE,TILE);
+  }
+  // Edge darkening
+  ctx.fillStyle='rgba(0,0,0,0.18)';
+  ctx.fillRect(x,y,1,TILE); ctx.fillRect(x+TILE-1,y,1,TILE);
+  ctx.fillStyle='rgba(255,255,255,0.08)'; ctx.fillRect(x+1,y,TILE-2,1);
+}
+
+function drawBrickTile(x,y){
+  // Base
+  const g=ctx.createLinearGradient(x,y,x,y+TILE);
+  g.addColorStop(0,P.brkMd); g.addColorStop(1,P.brkDk);
+  ctx.fillStyle=g; ctx.fillRect(x,y,TILE,TILE);
+  // Mortar lines
+  ctx.fillStyle=P.brkDk;
+  ctx.fillRect(x,y+8,TILE,1);
+  ctx.fillRect(x+8,y,1,8); ctx.fillRect(x+4,y+9,1,7);
+  // Brick faces
+  ctx.fillStyle=P.brkHi;
+  ctx.fillRect(x+1,y+1,6,6); ctx.fillRect(x+9,y+1,6,6);
+  ctx.fillRect(x+1,y+10,2,5); ctx.fillRect(x+5,y+10,8,5);
+  // Highlight
+  ctx.fillStyle='rgba(255,255,255,0.25)';
+  ctx.fillRect(x+1,y+1,1,6); ctx.fillRect(x+1,y+1,6,1);
+  ctx.fillRect(x+9,y+1,1,6); ctx.fillRect(x+9,y+1,6,1);
+  // Shadow
+  ctx.fillStyle='rgba(0,0,0,0.25)'; ctx.fillRect(x,y,TILE,1); ctx.fillRect(x,y,1,TILE);
+}
+
+function drawQTile(x,y,tx,ty){
+  const hit=qHit[`${tx},${ty}`];
+  if(hit){
+    ctx.fillStyle=P.hdDk; ctx.fillRect(x,y,TILE,TILE);
+    ctx.fillStyle=P.hd;   ctx.fillRect(x+1,y+1,TILE-2,TILE-2);
+    ctx.fillStyle=P.hdLt; ctx.fillRect(x+1,y+1,TILE-2,2); ctx.fillRect(x+1,y+1,2,TILE-2);
+    ctx.fillStyle='rgba(0,0,0,0.3)'; ctx.fillRect(x+TILE-2,y+2,2,TILE-2); ctx.fillRect(x+2,y+TILE-2,TILE-2,2);
+    return;
+  }
+  const pulse=Math.abs(Math.sin(stateTimer*0.06));
+  const g=ctx.createLinearGradient(x,y,x,y+TILE);
+  g.addColorStop(0,P.qHi); g.addColorStop(0.4,P.qLt); g.addColorStop(1,P.qDk);
+  ctx.fillStyle=g; ctx.fillRect(x,y,TILE,TILE);
+  // Glow
+  ctx.shadowBlur=4+pulse*6; ctx.shadowColor=P.qHi;
+  // Border
+  ctx.fillStyle=P.qDk; ctx.fillRect(x,y,TILE,1); ctx.fillRect(x,y,1,TILE);
+  ctx.fillRect(x+TILE-1,y,1,TILE); ctx.fillRect(x,y+TILE-1,TILE,1);
+  ctx.fillStyle=P.qHi; ctx.fillRect(x+1,y+1,TILE-2,2); ctx.fillRect(x+1,y+1,2,TILE-4);
+  // ? symbol with glow
+  ctx.fillStyle=P.white; ctx.font='bold 8px monospace'; ctx.textAlign='center';
+  ctx.fillText('?',x+TILE/2,y+11);
+  ctx.shadowBlur=0;
+}
+
+function drawHardTile(x,y){
+  ctx.fillStyle=P.hdDk; ctx.fillRect(x,y,TILE,TILE);
+  ctx.fillStyle=P.hd; ctx.fillRect(x+1,y+1,TILE-2,TILE-2);
+  ctx.fillStyle=P.hdLt; ctx.fillRect(x+1,y+1,TILE-2,2); ctx.fillRect(x+1,y+1,2,TILE-3);
+  ctx.fillStyle='rgba(0,0,0,0.2)'; ctx.fillRect(x+TILE-2,y+2,2,TILE-2); ctx.fillRect(x+2,y+TILE-2,TILE-2,2);
+  // Rivets
+  ctx.fillStyle=P.hdDk; ctx.fillRect(x+3,y+3,2,2); ctx.fillRect(x+11,y+3,2,2);
+  ctx.fillRect(x+3,y+11,2,2); ctx.fillRect(x+11,y+11,2,2);
+}
+
+function drawPipeTop(x,y){
+  const g=ctx.createLinearGradient(x-1,y,x+TILE+1,y);
+  g.addColorStop(0,P.ppDk); g.addColorStop(0.3,P.ppLt); g.addColorStop(0.7,P.pp); g.addColorStop(1,P.ppDk);
+  ctx.fillStyle=g; ctx.fillRect(x-2,y,TILE+4,5);
+  const g2=ctx.createLinearGradient(x,y,x+TILE,y);
+  g2.addColorStop(0,P.ppDk); g2.addColorStop(0.25,P.ppLt); g2.addColorStop(0.75,P.pp); g2.addColorStop(1,P.ppDk);
+  ctx.fillStyle=g2; ctx.fillRect(x,y+5,TILE,TILE-5);
+  ctx.fillStyle=P.ppHi; ctx.fillRect(x+2,y,2,4); ctx.fillRect(x+3,y+5,2,TILE-5);
+  ctx.fillStyle='rgba(0,0,0,0.3)'; ctx.fillRect(x-2,y,1,5); ctx.fillRect(x+TILE+1,y,1,5);
+  ctx.fillRect(x,y+5,1,TILE-5); ctx.fillRect(x+TILE-1,y+5,1,TILE-5);
+}
+
+function drawPipeBody(x,y){
+  const g=ctx.createLinearGradient(x,y,x+TILE,y);
+  g.addColorStop(0,P.ppDk); g.addColorStop(0.25,P.ppLt); g.addColorStop(0.7,P.pp); g.addColorStop(1,P.ppDk);
+  ctx.fillStyle=g; ctx.fillRect(x,y,TILE,TILE);
+  ctx.fillStyle=P.ppHi; ctx.fillRect(x+3,y,2,TILE);
+  ctx.fillStyle='rgba(0,0,0,0.25)'; ctx.fillRect(x,y,1,TILE); ctx.fillRect(x+TILE-1,y,1,TILE);
+}
+
+function drawFlagpole(){
+  const fpTileX = LEVEL[10].indexOf('F');
+  const fpx = fpTileX * TILE + TILE + 1;
+  const fpy0 = fpTileX * 0 + 10*TILE - TILE*9;
+  // Pole
+  const pg=ctx.createLinearGradient(fpx,0,fpx+3,0);
+  pg.addColorStop(0,'#888'); pg.addColorStop(0.5,'#fff'); pg.addColorStop(1,'#666');
+  ctx.fillStyle=pg; ctx.fillRect(fpx,fpy0,3,TILE*10);
+  // Ball on top
+  ctx.fillStyle=P.coinLt; ctx.shadowBlur=4; ctx.shadowColor=P.coinLt;
+  ctx.beginPath(); ctx.arc(fpx+1.5,fpy0,4,0,Math.PI*2); ctx.fill();
+  ctx.shadowBlur=0;
+  // Flag
+  ctx.fillStyle=P.flagGrn;
+  ctx.fillRect(fpx+3,fpy0+flagY,10,8);
+  ctx.fillStyle='#004800';
+  ctx.fillRect(fpx+3,fpy0+flagY,1,8); ctx.fillRect(fpx+3,fpy0+flagY,10,1);
+}
+
+// ── Sprite drawing helpers ─────────────────────────────────────
+function drawSpr(spr,wx,wy,flip){
+  const sw=spr.width*SCALE, sh=spr.height*SCALE;
+  if(flip){
+    ctx.save(); ctx.translate((wx+spr.width/2)*SCALE,0); ctx.scale(-1,1);
+    ctx.drawImage(spr,-(spr.width/2)*SCALE, wy*SCALE, sw, sh);
+    ctx.restore();
+  } else {
+    ctx.drawImage(spr, wx*SCALE, wy*SCALE, sw, sh);
+  }
+}
+
+function drawMarioSprite(){
+  if(mario.dead&&mario.deadTimer>30&&mario.deadTimer%6<3) return;
+  if(mario.invincible>0&&Math.floor(mario.invincible/4)%2===0) return;
+
+  const x=Math.round(mario.x), y=Math.round(mario.y);
+  const flip=(mario.dir===-1);
+
+  ctx.save();
+  ctx.translate(0,0);
+
+  if(mario.dead){
+    const spr=SPR_MARIO_SM[4];
+    drawSprWorld(spr, x+(mario.w-spr.width)/2, y+(mario.h-spr.height), flip);
+  } else if(mario.big){
+    const frame=mario.onGround?(mario.frame%3):3;
+    const spr=SPR_MARIO_BIG[frame];
+    drawSprWorld(spr, x+(mario.w-spr.width)/2, y+(mario.h-spr.height), flip);
+  } else {
+    const frame=mario.onGround?(mario.frame%3):3;
+    const spr=SPR_MARIO_SM[frame];
+    drawSprWorld(spr, x+(mario.w-spr.width)/2, y+(mario.h-spr.height), flip);
+  }
+  ctx.restore();
+}
+
+function drawSprWorld(spr,wx,wy,flip){
+  if(flip){
+    ctx.save();
+    ctx.translate((wx+spr.width)*SCALE, wy*SCALE);
+    ctx.scale(-SCALE, SCALE);
+    ctx.drawImage(spr,0,0,spr.width,spr.height);
+    ctx.restore();
+  } else {
+    ctx.drawImage(spr, wx*SCALE, wy*SCALE, spr.width*SCALE, spr.height*SCALE);
+  }
+}
+
+function drawEnemies(){
+  for(const e of enemies){
+    if(!e.alive) continue;
+    if(e.x+e.w<cameraX-TILE||e.x>cameraX+GW+TILE) continue;
+    const x=Math.round(e.x), y=Math.round(e.y);
+    if(e.type==='goomba'){
+      if(e.flat){ ctx.drawImage(GOOMBA_FLAT, x*SCALE, (y+6)*SCALE, GOOMBA_FLAT.width*SCALE, GOOMBA_FLAT.height*SCALE); }
+      else{ ctx.drawImage(SPR_GOOMBA[e.wframe], x*SCALE, y*SCALE, SPR_GOOMBA[0].width*SCALE, SPR_GOOMBA[0].height*SCALE); }
+    } else if(e.type==='koopa'){
+      if(e.shell){ ctx.drawImage(KOOPA_SHELL, x*SCALE, y*SCALE, KOOPA_SHELL.width*SCALE, KOOPA_SHELL.height*SCALE); }
+      else{
+        const flip=e.vx>0;
+        drawSprWorld(SPR_KOOPA[e.wframe], x, y, flip);
+      }
+    }
+  }
+}
+
+function drawItems(){
+  for(const it of items){
+    if(it.type==='mushroom'){
+      ctx.drawImage(MUSHROOM_SPR, Math.round(it.x)*SCALE, Math.round(it.y)*SCALE, MUSHROOM_SPR.width*SCALE, MUSHROOM_SPR.height*SCALE);
+    }
+  }
+}
+
+function drawParticleLayer(){
+  particles.forEach(p=>{
+    ctx.globalAlpha=Math.max(0,p.life);
+    if(p.isCoin){
+      ctx.drawImage(COIN_SPR, (p.x-3)*SCALE, (p.y-5)*SCALE, COIN_SPR.width*SCALE, COIN_SPR.height*SCALE);
+    } else {
+      ctx.shadowBlur=3; ctx.shadowColor=p.color;
+      ctx.fillStyle=p.color;
+      ctx.fillRect((p.x-p.size/2)*SCALE,(p.y-p.size/2)*SCALE,p.size*SCALE,p.size*SCALE);
+      ctx.shadowBlur=0;
+    }
+  });
+  ctx.globalAlpha=1;
+}
+
+// ── Screen effects (drawn at screen space) ─────────────────────
+function drawScreenEffects(){
+  // Subtle scanlines
+  ctx.fillStyle='rgba(0,0,0,0.07)';
+  for(let y=0;y<CH;y+=3) ctx.fillRect(0,y,CW,1);
+  // Vignette
+  const vg=ctx.createRadialGradient(CW/2,CH/2,CH*0.25,CW/2,CH/2,CH*0.85);
+  vg.addColorStop(0,'rgba(0,0,0,0)'); vg.addColorStop(1,'rgba(0,0,0,0.5)');
+  ctx.fillStyle=vg; ctx.fillRect(0,0,CW,CH);
+}
+
+// ── HUD ────────────────────────────────────────────────────────
+function drawHUD(){
+  if(state==='start'){
+    ctx.fillStyle='rgba(0,0,8,0.7)'; ctx.fillRect(0,0,CW,CH);
+    ctx.save();
+    // Title glow
+    ctx.shadowBlur=24; ctx.shadowColor='#ff6030';
+    ctx.fillStyle='#ff9944'; ctx.font=`bold ${Math.round(14*SCALE/2)}px monospace`; ctx.textAlign='center';
+    ctx.fillText('SUPER MARIO BROS', CW/2, CH/2-50);
+    ctx.shadowBlur=0;
+    ctx.fillStyle='#ffffff'; ctx.font=`bold ${Math.round(9*SCALE/2)}px monospace`;
+    ctx.fillText('WORLD 1-1', CW/2, CH/2-10);
+    ctx.fillStyle='#88aaff'; ctx.font=`${Math.round(6*SCALE/2)}px monospace`;
+    ctx.fillText('← → MOVE   Z / SPACE = JUMP', CW/2, CH/2+25);
+    if(Math.floor(stateTimer/22)%2===0){
+      ctx.shadowBlur=8; ctx.shadowColor='#ffff44';
+      ctx.fillStyle='#ffff44'; ctx.font=`bold ${Math.round(9*SCALE/2)}px monospace`;
+      ctx.fillText('CLICK OR SPACE TO START', CW/2, CH/2+65);
+      ctx.shadowBlur=0;
+    }
+    ctx.restore();
+  }
+  if(state==='win'){
+    ctx.fillStyle='rgba(0,0,8,0.72)'; ctx.fillRect(0,0,CW,CH);
+    ctx.save();
+    ctx.shadowBlur=22; ctx.shadowColor='#ffff00';
+    ctx.fillStyle='#ffee00'; ctx.font=`bold ${Math.round(14*SCALE/2)}px monospace`; ctx.textAlign='center';
+    ctx.fillText('COURSE CLEAR!', CW/2, CH/2-40);
+    ctx.shadowBlur=0;
+    ctx.fillStyle='#ffffff'; ctx.font=`bold ${Math.round(9*SCALE/2)}px monospace`;
+    ctx.fillText(`SCORE  ${String(score).padStart(6,'0')}`, CW/2, CH/2+10);
+    if(Math.floor(stateTimer/22)%2===0){
+      ctx.fillStyle='#aaffaa';
+      ctx.fillText('SPACE TO PLAY AGAIN', CW/2, CH/2+55);
+    }
+    ctx.restore();
+  }
+  if(state==='gameover'){
+    ctx.fillStyle='rgba(0,0,0,0.8)'; ctx.fillRect(0,0,CW,CH);
+    ctx.save();
+    ctx.shadowBlur=28; ctx.shadowColor='#ff2200';
+    ctx.fillStyle='#ff4444'; ctx.font=`bold ${Math.round(16*SCALE/2)}px monospace`; ctx.textAlign='center';
+    ctx.fillText('GAME OVER', CW/2, CH/2-20);
+    ctx.shadowBlur=0;
+    ctx.fillStyle='#ffffff'; ctx.font=`bold ${Math.round(8*SCALE/2)}px monospace`;
+    ctx.fillText(`SCORE  ${String(score).padStart(6,'0')}`, CW/2, CH/2+22);
+    if(Math.floor(stateTimer/22)%2===0){
+      ctx.fillStyle='#ffaaaa';
+      ctx.fillText('SPACE TO RESTART', CW/2, CH/2+60);
+    }
+    ctx.restore();
+  }
+}
+
+function updateUI(){
+  document.getElementById('score').textContent=String(score).padStart(6,'0');
+  document.getElementById('coins').textContent='×'+String(coins).padStart(2,'0');
+  document.getElementById('world').textContent=world;
+  document.getElementById('timer').textContent=String(timeLeft).padStart(3,'0');
+  document.getElementById('lives').textContent=('♥ ').repeat(lives).trim()||'♥';
+}
+
+// ── Main loop ──────────────────────────────────────────────────
+function loop(){ update(); render(); requestAnimationFrame(loop); }
+updateUI();
+loop();
+</script>
+</body>
+</html>
