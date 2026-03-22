@@ -221,6 +221,18 @@ canvas.addEventListener('mousemove', e => {
   mouseX = (e.clientX - r.left) * (CW / r.width);
 });
 canvas.addEventListener('click', () => { if(AC.state==='suspended') AC.resume(); launch(); });
+// Direct finger-to-paddle touch control
+canvas.addEventListener('touchmove', e => {
+  e.preventDefault();
+  const r = canvas.getBoundingClientRect();
+  mouseX = (e.touches[0].clientX - r.left) * (CW / r.width);
+}, {passive:false});
+canvas.addEventListener('touchstart', e => {
+  e.preventDefault();
+  const r = canvas.getBoundingClientRect();
+  mouseX = (e.touches[0].clientX - r.left) * (CW / r.width);
+  if(AC.state==='suspended') AC.resume(); launch();
+}, {passive:false});
 document.addEventListener('keydown', e => {
   keys[e.code] = true;
   if(e.code==='Space') { AC.resume(); launch(); }
