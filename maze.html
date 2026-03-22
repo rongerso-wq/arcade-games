@@ -613,7 +613,9 @@ function drawBonusIcon(type){
 
 // ── Pac face photo ──
 const pacImg=new Image();
+pacImg.crossOrigin='anonymous';
 pacImg.src='pacman-face.jpeg';
+pacImg.onerror=()=>console.warn('pacman-face.jpeg failed to load');
 
 // ── Pac (photo face) ──
 function drawPac(alpha=1){
