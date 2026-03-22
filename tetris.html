@@ -439,71 +439,34 @@ requestAnimationFrame(loop);
 
 
 <!-- TOUCH CONTROLS -->
-<style>
-.tc-btn{
-  width:26px;height:26px;
-  background:rgba(255,200,0,0.85);
-  border:2px solid #ff8800;border-radius:5px;
-  display:flex;align-items:center;justify-content:center;
-  font-size:12px;color:#000;font-weight:bold;
-  pointer-events:all;touch-action:none;
-  -webkit-tap-highlight-color:transparent;
-  cursor:pointer;box-shadow:0 2px 4px rgba(0,0,0,0.4);
-}
-.tc-btn:active{background:rgba(255,140,0,0.95);}
-#dpad{
-  position:relative;width:78px;height:78px;
-  pointer-events:none;
-}
-#dp-up   {position:absolute;top:0;left:26px;}
-#dp-down {position:absolute;bottom:0;left:26px;}
-#dp-left {position:absolute;top:26px;left:0;}
-#dp-right{position:absolute;top:26px;right:0;}
-#tc-wrap{
-  position:fixed;bottom:10px;left:50%;transform:translateX(-50%);
-  display:flex;gap:16px;align-items:center;z-index:99999;
-}
-#dp-fire{
-  width:34px;height:34px;
-  background:rgba(220,40,40,0.85);
-  border:2px solid #cc0000;border-radius:50%;
-  display:flex;align-items:center;justify-content:center;
-  font-size:9px;font-weight:bold;color:#fff;
-  pointer-events:all;touch-action:none;
-  -webkit-tap-highlight-color:transparent;
-  cursor:pointer;box-shadow:0 2px 4px rgba(0,0,0,0.4);
-}
-#dp-fire:active{background:rgba(180,0,0,0.95);}
-</style>
-<div id="tc-wrap">
-  <div id="dpad">
-    <div class="tc-btn" id="dp-up">&#9650;</div>
-    <div class="tc-btn" id="dp-left">&#9664;</div>
-    <div class="tc-btn" id="dp-right">&#9654;</div>
-    <div class="tc-btn" id="dp-down">&#9660;</div>
-  </div>
-  <div id="dp-fire">FIRE</div>
-</div>
 <script>
+/* Full-screen swipe — swipe anywhere to move, tap to fire */
 (function(){
   function fire(code,type){
     var ek={code:code,key:code==='Space'?' ':code.replace('Arrow',''),bubbles:true,cancelable:true};
     document.dispatchEvent(new KeyboardEvent(type,ek));
     window.dispatchEvent(new KeyboardEvent(type,ek));
   }
-  function bind(id,code){
-    var el=document.getElementById(id);
-    if(!el)return;
-    el.addEventListener('touchstart',function(e){e.preventDefault();fire(code,'keydown');},{passive:false});
-    el.addEventListener('touchend',function(e){e.preventDefault();fire(code,'keyup');},{passive:false});
-    el.addEventListener('mousedown',function(){fire(code,'keydown');});
-    el.addEventListener('mouseup',function(){fire(code,'keyup');});
-  }
-  bind('dp-up','ArrowUp');
-  bind('dp-down','ArrowDown');
-  bind('dp-left','ArrowLeft');
-  bind('dp-right','ArrowRight');
-  bind('dp-fire','Space');
+  var sx=0,sy=0;
+  document.addEventListener('touchstart',function(e){
+    sx=e.touches[0].clientX;
+    sy=e.touches[0].clientY;
+  },{passive:true});
+  document.addEventListener('touchend',function(e){
+    var dx=e.changedTouches[0].clientX-sx;
+    var dy=e.changedTouches[0].clientY-sy;
+    var adx=Math.abs(dx),ady=Math.abs(dy);
+    if(adx<20&&ady<20){
+      fire('Space','keydown');
+      setTimeout(function(){fire('Space','keyup');},80);
+      return;
+    }
+    var code;
+    if(adx>ady){code=dx>0?'ArrowRight':'ArrowLeft';}
+    else{code=dy>0?'ArrowDown':'ArrowUp';}
+    fire(code,'keydown');
+    setTimeout(function(){fire(code,'keyup');},80);
+  },{passive:true});
 })();
 </script>
 <!-- END TOUCH CONTROLS -->
